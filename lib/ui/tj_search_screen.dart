@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 
 import '../models/tj_search_result.dart';
 import '../services/tj_search_service.dart';
+import '../storage/local_storage.dart';
 import '../theme/app_theme.dart';
+import 'song_edit_sheet.dart';
 import 'widgets/app_header.dart';
 import 'widgets/responsive_center.dart';
 
@@ -14,19 +16,23 @@ const _minQueryLength = 2;
 /// The "TJ 검색" tab: search TJ Media's official accompaniment catalog via
 /// the `/api/tj-search` proxy (see api/tj-search.js) and display results.
 ///
-/// This screen only *displays* TJ results — it never writes to the local
-/// songs database. Saving a result into the library is a separate,
-/// not-yet-built feature (see the disabled trailing affordance on each row).
+/// Tapping "+" on a result opens the normal song add sheet/dialog (see
+/// song_edit_sheet.dart), prefilled with that result's number/title/artist
+/// and karaoke_type forced to 'TJ'. Saving goes through the same
+/// [SongRepository] as every other add flow — there is no TJ-specific
+/// insertion path. A result whose (karaoke_type == 'TJ', song_number) pair
+/// already exists locally shows a disabled "추가됨" state instead.
 class TjSearchScreen extends StatefulWidget {
+  final LocalStorage storage;
   final TjSearchService? service;
 
-  const TjSearchScreen({super.key, this.service});
+  const TjSearchScreen({super.key, required this.storage, this.service});
 
   @override
-  State<TjSearchScreen> createState() => _TjSearchScreenState();
+  State<TjSearchScreen> createState() => TjSearchScreenState();
 }
 
-class _TjSearchScreenState extends State<TjSearchScreen> {
+class TjSearchScreenState extends State<TjSearchScreen> {
   late final TjSearchService _service;
   final _controller = TextEditingController();
   Timer? _debounce;
@@ -39,10 +45,15 @@ class _TjSearchScreenState extends State<TjSearchScreen> {
   bool _searched = false;
   String? _error;
 
+  // Song numbers of songs already saved locally with karaoke_type == 'TJ'.
+  // Used to show a "추가됨" state instead of "+" for results already added.
+  Set<String> _addedNumbers = const {};
+
   @override
   void initState() {
     super.initState();
     _service = widget.service ?? TjSearchService();
+    unawaited(refreshAddedSongs());
   }
 
   @override
@@ -53,6 +64,35 @@ class _TjSearchScreenState extends State<TjSearchScreen> {
       _service.dispose();
     }
     super.dispose();
+  }
+
+  /// Re-reads which TJ song numbers already exist locally. Called on init,
+  /// after the add sheet closes, and by [AppShell] when this tab becomes
+  /// visible, so a song added elsewhere (or in a previous session) is
+  /// reflected without needing a new search.
+  Future<void> refreshAddedSongs() async {
+    final all = await widget.storage.songs.getAll();
+    if (!mounted) return;
+    setState(() {
+      _addedNumbers = all
+          .where((s) => s.karaokeType == 'TJ')
+          .map((s) => s.songNumber)
+          .toSet();
+    });
+  }
+
+  Future<void> _onAddTap(TjSearchResult result) async {
+    // Re-check against the repository right before opening the form, so a
+    // song added via another tab in the meantime isn't duplicated.
+    await refreshAddedSongs();
+    if (!mounted || _addedNumbers.contains(result.songNumber)) return;
+
+    await showSongEditSheet(
+      context: context,
+      storage: widget.storage,
+      tjResult: result,
+    );
+    await refreshAddedSongs();
   }
 
   void _onQueryChanged(String value) {
@@ -183,7 +223,15 @@ class _TjSearchScreenState extends State<TjSearchScreen> {
       key: const Key('tjSearchResultsList'),
       padding: const EdgeInsets.only(bottom: 16),
       itemCount: _results.length,
-      itemBuilder: (context, index) => _TjResultTile(result: _results[index]),
+      itemBuilder: (context, index) {
+        final result = _results[index];
+        final added = _addedNumbers.contains(result.songNumber);
+        return _TjResultTile(
+          result: result,
+          added: added,
+          onAdd: added ? null : () => _onAddTap(result),
+        );
+      },
     );
   }
 }
@@ -232,12 +280,18 @@ class _TjMessageState extends StatelessWidget {
 /// A single TJ result row. Deliberately close to (but not identical to)
 /// [SongCard]'s number → title → artist hierarchy: no practice-status bar,
 /// key/difficulty meta, or favorite toggle, since this song isn't in the
-/// local library. The trailing "+" is a save-to-library affordance that is
-/// intentionally disabled — that feature isn't built yet.
+/// local library. The trailing affordance is either a tappable "+" (opens
+/// the add form) or, when [added] is true, a disabled "추가됨" badge.
 class _TjResultTile extends StatelessWidget {
   final TjSearchResult result;
+  final bool added;
+  final VoidCallback? onAdd;
 
-  const _TjResultTile({required this.result});
+  const _TjResultTile({
+    required this.result,
+    required this.added,
+    this.onAdd,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -291,10 +345,30 @@ class _TjResultTile extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 12),
-          // Save-to-library affordance — visual only, not wired up yet.
-          IgnorePointer(
-            child: Opacity(
-              opacity: 0.4,
+          if (added)
+            Container(
+              key: Key('tjAdded_${result.songNumber}'),
+              height: 30,
+              padding: const EdgeInsets.symmetric(horizontal: 9),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: AppColors.surfaceHigh,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Text(
+                '추가됨',
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textTertiary,
+                ),
+              ),
+            )
+          else
+            InkWell(
+              key: Key('tjAdd_${result.songNumber}'),
+              onTap: onAdd,
+              borderRadius: BorderRadius.circular(8),
               child: Container(
                 width: 30,
                 height: 30,
@@ -309,7 +383,6 @@ class _TjResultTile extends StatelessWidget {
                 ),
               ),
             ),
-          ),
         ],
       ),
     );

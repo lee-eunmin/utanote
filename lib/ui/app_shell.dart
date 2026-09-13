@@ -17,21 +17,34 @@ class AppShell extends StatefulWidget {
   State<AppShell> createState() => _AppShellState();
 }
 
+const _tjSearchTabIndex = 2;
+
 class _AppShellState extends State<AppShell> {
   int _index = 0;
+  final _tjSearchKey = GlobalKey<TjSearchScreenState>();
+
+  void _onTabTap(int i) {
+    setState(() => _index = i);
+    // The IndexedStack keeps TjSearchScreen alive across tab switches, so a
+    // song added/edited from another tab wouldn't otherwise be reflected in
+    // its "추가됨" state until a new search ran.
+    if (i == _tjSearchTabIndex) {
+      _tjSearchKey.currentState?.refreshAddedSongs();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final screens = [
       SongListScreen(storage: widget.storage),
       FoldersScreen(storage: widget.storage),
-      const TjSearchScreen(),
+      TjSearchScreen(key: _tjSearchKey, storage: widget.storage),
     ];
     return Scaffold(
       body: IndexedStack(index: _index, children: screens),
       bottomNavigationBar: AppBottomNav(
         currentIndex: _index,
-        onTap: (i) => setState(() => _index = i),
+        onTap: _onTabTap,
       ),
     );
   }

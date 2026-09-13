@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/song.dart';
 import '../models/song_options.dart';
+import '../models/tj_search_result.dart';
 import '../storage/local_storage.dart';
 import '../theme/app_theme.dart';
 import 'widgets/choice_chip_row.dart';
@@ -21,10 +22,17 @@ const double _wideLayoutBreakpoint = 720;
 /// new songs always default to 'TJ', while an existing song (which may be
 /// legacy 'KY' data) keeps its original [Song.karaokeType] untouched. The
 /// legacy [Song.memo] field is never read or written by this form either.
+///
+/// [tjResult] pre-fills song_number/title/artist from a TJ search hit for
+/// the "add from TJ search" flow (see tj_search_screen.dart). It only has an
+/// effect when [existing] is null — creating a brand-new song, never
+/// overwriting one being edited — and the title is kept byte-for-byte as TJ
+/// returned it (no translation; use search aliases for Korean/custom names).
 Future<void> showSongEditSheet({
   required BuildContext context,
   required LocalStorage storage,
   Song? existing,
+  TjSearchResult? tjResult,
 }) {
   final isWide = MediaQuery.sizeOf(context).width >= _wideLayoutBreakpoint;
   if (isWide) {
@@ -36,6 +44,7 @@ Future<void> showSongEditSheet({
           child: _SongEditSheet(
             storage: storage,
             existing: existing,
+            tjResult: tjResult,
             isDialog: true,
           ),
         ),
@@ -47,18 +56,24 @@ Future<void> showSongEditSheet({
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
     constraints: const BoxConstraints(maxWidth: 640),
-    builder: (context) => _SongEditSheet(storage: storage, existing: existing),
+    builder: (context) => _SongEditSheet(
+      storage: storage,
+      existing: existing,
+      tjResult: tjResult,
+    ),
   );
 }
 
 class _SongEditSheet extends StatefulWidget {
   final LocalStorage storage;
   final Song? existing;
+  final TjSearchResult? tjResult;
   final bool isDialog;
 
   const _SongEditSheet({
     required this.storage,
     this.existing,
+    this.tjResult,
     this.isDialog = false,
   });
 
@@ -86,9 +101,18 @@ class _SongEditSheetState extends State<_SongEditSheet> {
   void initState() {
     super.initState();
     final existing = _existing;
-    _numberController = TextEditingController(text: existing?.songNumber ?? '');
-    _titleController = TextEditingController(text: existing?.title ?? '');
-    _artistController = TextEditingController(text: existing?.artist ?? '');
+    // A TJ prefill only seeds a brand-new song's fields; it never applies
+    // when editing an existing row.
+    final tjResult = existing == null ? widget.tjResult : null;
+    _numberController = TextEditingController(
+      text: existing?.songNumber ?? tjResult?.songNumber ?? '',
+    );
+    _titleController = TextEditingController(
+      text: existing?.title ?? tjResult?.title ?? '',
+    );
+    _artistController = TextEditingController(
+      text: existing?.artist ?? tjResult?.artist ?? '',
+    );
     _aliases = List.of(existing?.searchAliases ?? const []);
     _keyType = existing?.keyType ?? kKeyTypes.first;
     _keyOffset = existing?.keyOffset ?? 0;
