@@ -4,7 +4,12 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { parseSection, searchRelevant, TJ_STR_TYPE } = require('../../api/tj-search.js');
+const {
+  parseSection,
+  searchRelevant,
+  TJ_STR_TYPE,
+  rankByRelevance,
+} = require('../../api/tj-search.js');
 
 function loadFixture(name) {
   return fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8');
@@ -126,6 +131,67 @@ test('searchRelevant searches only by song number for all-digit queries', async 
   assert.equal(
     new URL(fetchMock.mock.calls[0].arguments[0]).searchParams.get('strType'),
     TJ_STR_TYPE.SONG_NUMBER
+  );
+});
+
+test('rankByRelevance orders artist-exact > artist-contains > title-exact > title-contains > other, preserving order within a tier', () => {
+  const results = [
+    { songNumber: '1', title: 'Other Song', artist: 'Someone Else' },
+    { songNumber: '2', title: 'A Title', artist: 'query Band' }, // artist contains
+    { songNumber: '3', title: 'query', artist: 'Another Artist' }, // title exact
+    { songNumber: '4', title: 'query song', artist: 'Yet Another' }, // title contains
+    { songNumber: '5', title: 'Second Other', artist: 'Nobody' },
+    { songNumber: '6', title: 'Unrelated', artist: 'query' }, // artist exact
+  ];
+
+  const ranked = rankByRelevance(results, 'query');
+
+  assert.deepEqual(
+    ranked.map((r) => r.songNumber),
+    ['6', '2', '3', '4', '1', '5']
+  );
+});
+
+test('rankByRelevance ignores case and spacing differences between query and artist/title', () => {
+  const results = [
+    { songNumber: '1', title: 'Something', artist: 'Someone' },
+    { songNumber: '2', title: 'Something', artist: ' Query  Band ' },
+  ];
+
+  const ranked = rankByRelevance(results, 'QUERY');
+
+  assert.deepEqual(ranked.map((r) => r.songNumber), ['2', '1']);
+});
+
+test('rankByRelevance treats a result with no artist as never artist-matching', () => {
+  const results = [
+    { songNumber: '1', title: 'query title', artist: '' },
+    { songNumber: '2', title: 'Unrelated', artist: 'query' },
+  ];
+
+  const ranked = rankByRelevance(results, 'query');
+
+  assert.deepEqual(ranked.map((r) => r.songNumber), ['2', '1']);
+});
+
+test('searchRelevant ranks an exact artist/title match above TJ\'s broader weakly-related matches for a broad query', async (t) => {
+  // Regression test for a real report: searching "아이유" returned weakly
+  // related titles (그 아이 / 돌아이 / Moai / But I) ahead of the actually
+  // relevant songs. Broad matches must still be returned, just ranked last.
+  const fetchMock = stubFetchByStrType({
+    [TJ_STR_TYPE.TITLE]: loadFixture('broad-query-title-results.html'),
+    [TJ_STR_TYPE.ARTIST]: loadFixture('broad-query-artist-results.html'),
+  });
+  t.after(() => fetchMock.mock.restore());
+
+  const results = await searchRelevant('아이유');
+
+  // 50001: exact artist match ("아이유"). 50006: exact title match
+  // ("아이유"). The rest are TJ's broad title matches, still present but
+  // ranked last, in their original TJ order.
+  assert.deepEqual(
+    results.map((r) => r.songNumber),
+    ['50001', '50006', '50002', '50003', '50004', '50005']
   );
 });
 

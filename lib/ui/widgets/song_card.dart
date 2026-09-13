@@ -87,106 +87,120 @@ class _SongCardState extends State<SongCard>
               border: Border(bottom: BorderSide(color: AppColors.hairline)),
             ),
             padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 2),
-            child: IntrinsicHeight(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  if (widget.selectionMode) ...[
-                    Center(
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 160),
-                        width: 20,
-                        height: 20,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: widget.selected
-                              ? AppColors.accent
-                              : Colors.transparent,
-                          border: Border.all(
-                            color: widget.selected
-                                ? AppColors.accent
-                                : AppColors.hairline,
-                            width: 1.4,
-                          ),
-                        ),
-                        child: widget.selected
-                            ? const Icon(
-                                Icons.check,
-                                size: 14,
-                                color: Colors.black,
-                              )
-                            : null,
+            child: Row(
+              // No IntrinsicHeight/stretch here: forcing the accent bar to an
+              // intrinsic-dry-layout height can be a fractional pixel taller
+              // than the column's real final layout (text metrics can shift
+              // slightly on web, e.g. after a font reload), which is what
+              // caused the "bottom overflowed by 1.00 pixels" bug. Sizing the
+              // bar from the Stack's actual final layout below avoids that.
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                if (widget.selectionMode) ...[
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 160),
+                    width: 20,
+                    height: 20,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: widget.selected
+                          ? AppColors.accent
+                          : Colors.transparent,
+                      border: Border.all(
+                        color: widget.selected
+                            ? AppColors.accent
+                            : AppColors.hairline,
+                        width: 1.4,
                       ),
                     ),
-                    const SizedBox(width: 12),
-                  ],
-                  Container(
-                    width: 3,
-                    decoration: BoxDecoration(
-                      color: practiceStatusColor(song.practiceStatus),
-                      borderRadius: BorderRadius.circular(2),
-                    ),
+                    child: widget.selected
+                        ? const Icon(
+                            Icons.check,
+                            size: 14,
+                            color: Colors.black,
+                          )
+                        : null,
                   ),
                   const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Row(
+                ],
+                Expanded(
+                  child: Stack(
+                    children: [
+                      Positioned(
+                        left: 0,
+                        top: 0,
+                        bottom: 0,
+                        child: Container(
+                          width: 3,
+                          decoration: BoxDecoration(
+                            color: practiceStatusColor(song.practiceStatus),
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.only(left: 15),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
                           children: [
-                            Expanded(
-                              child: Text(
-                                song.songNumber,
-                                style: const TextStyle(
-                                  fontSize: 11.5,
-                                  color: AppColors.textTertiary,
-                                  fontWeight: FontWeight.w700,
-                                  letterSpacing: 0.4,
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    song.songNumber,
+                                    style: const TextStyle(
+                                      fontSize: 11.5,
+                                      color: AppColors.textTertiary,
+                                      fontWeight: FontWeight.w700,
+                                      letterSpacing: 0.4,
+                                    ),
+                                  ),
                                 ),
+                                if (!widget.selectionMode)
+                                  ScaleTransition(
+                                    scale: _favScale,
+                                    child: _FavoriteButton(
+                                      favorite: song.favorite,
+                                      onTap: _toggleFavorite,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              song.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 16.5,
+                                fontWeight: FontWeight.w700,
+                                height: 1.2,
+                                color: AppColors.textPrimary,
                               ),
                             ),
-                            if (!widget.selectionMode)
-                              ScaleTransition(
-                                scale: _favScale,
-                                child: _FavoriteButton(
-                                  favorite: song.favorite,
-                                  onTap: _toggleFavorite,
+                            if (song.artist != null &&
+                                song.artist!.isNotEmpty) ...[
+                              const SizedBox(height: 2),
+                              Text(
+                                song.artist!,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  color: AppColors.textSecondary,
                                 ),
                               ),
+                            ],
+                            const SizedBox(height: 8),
+                            _MetaRow(song: song),
                           ],
                         ),
-                        const SizedBox(height: 3),
-                        Text(
-                          song.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 16.5,
-                            fontWeight: FontWeight.w700,
-                            height: 1.2,
-                            color: AppColors.textPrimary,
-                          ),
-                        ),
-                        if (song.artist != null && song.artist!.isNotEmpty) ...[
-                          const SizedBox(height: 2),
-                          Text(
-                            song.artist!,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 13,
-                              color: AppColors.textSecondary,
-                            ),
-                          ),
-                        ],
-                        const SizedBox(height: 8),
-                        _MetaRow(song: song),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),

@@ -138,14 +138,58 @@ async function searchByCategory(query, category) {
   }
 }
 
+// Lowercases and strips all whitespace so "아이유" / " 아이 유 " / "AIU"-style
+// spacing/case differences don't affect comparison. Deliberately more
+// aggressive than normalizeHeading (which only collapses whitespace) since
+// this is for query/title/artist comparison, not exact heading matching.
+function normalizeForMatch(text) {
+  return (text || '').toLowerCase().replace(/\s+/g, '');
+}
+
+// Lower tier number = more relevant. Tier 5 is TJ's own broad match (title
+// or artist search hit it for some other reason — alias, romanization,
+// Japanese title, etc.) and is never dropped, only sorted last.
+function relevanceTier(result, normQuery) {
+  const normArtist = normalizeForMatch(result.artist);
+  const normTitle = normalizeForMatch(result.title);
+
+  if (normArtist && normArtist === normQuery) return 1;
+  if (normArtist && normArtist.includes(normQuery)) return 2;
+  if (normTitle === normQuery) return 3;
+  if (normTitle.includes(normQuery)) return 4;
+  return 5;
+}
+
+// Stable sort into relevance tiers (artist-exact, artist-contains,
+// title-exact, title-contains, other) without dropping any results, so
+// broad/alias TJ matches are still returned — just ranked after the
+// obviously-relevant ones. Order within a tier is preserved via the index
+// tie-break, since Array.prototype.sort is not guaranteed stable in every
+// engine.
+function rankByRelevance(results, query) {
+  const normQuery = normalizeForMatch(query);
+  return results
+    .map((result, index) => ({
+      result,
+      index,
+      tier: relevanceTier(result, normQuery),
+    }))
+    .sort((a, b) => a.tier - b.tier || a.index - b.index)
+    .map((entry) => entry.result);
+}
+
 /// Searches only the categories relevant to our app (title, artist, song
 /// number) so TJ's lyricist/composer/medley-only matches — which our API
 /// doesn't expose and would otherwise look like irrelevant noise — never
-/// appear in the response. Merged and deduplicated by songNumber.
+/// appear in the response. Merged and deduplicated by songNumber, then
+/// ranked by relevance (see rankByRelevance) so an exact/close artist or
+/// title match sorts before TJ's broader fuzzy matches.
 ///
 /// This deliberately does NOT add literal post-filtering on top of TJ's own
 /// title/artist matching — TJ's artist search can surface useful aliases or
-/// romanizations that a literal substring filter would drop.
+/// romanizations that a literal substring filter would drop. Reordering by
+/// relevance keeps those results reachable while putting obviously-relevant
+/// songs first.
 async function searchRelevant(query) {
   const isNumeric = /^\d+$/.test(query);
 
@@ -165,7 +209,7 @@ async function searchRelevant(query) {
     seen.add(result.songNumber);
     merged.push(result);
   }
-  return merged;
+  return rankByRelevance(merged, query);
 }
 
 module.exports = async (req, res) => {
@@ -222,3 +266,4 @@ module.exports = async (req, res) => {
 module.exports.parseSection = parseSection;
 module.exports.searchRelevant = searchRelevant;
 module.exports.TJ_STR_TYPE = TJ_STR_TYPE;
+module.exports.rankByRelevance = rankByRelevance;
