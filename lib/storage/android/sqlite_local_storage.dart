@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart' show kDebugMode, debugPrint;
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
@@ -6,6 +9,27 @@ import '../../models/song.dart';
 import '../folder_repository.dart';
 import '../local_storage.dart';
 import '../song_repository.dart';
+
+/// Bound on how long a single write's plugin round-trip is allowed to hang
+/// before we treat it as suspect. This is a *safety net*, not the primary
+/// completion signal: the normal path is still a plain `await` on the
+/// sqflite call. See [_SqliteSongRepository.create] / `.update` for why this
+/// exists — on Android, sqflite's method-channel reply for a write has been
+/// observed to occasionally never arrive back in the running Dart isolate
+/// even though the write already committed to disk (confirmed by the row
+/// being present after an app restart). Generous on purpose so it never
+/// fires under normal (even slow-emulator) conditions.
+const Duration _writeTimeout = Duration(seconds: 8);
+
+/// Temporary diagnostic logging for investigating the Android save-hang
+/// bug (see CLAUDE.md task history). Gated on [kDebugMode] so it never
+/// prints in release builds; safe to delete entirely once the fix is
+/// confirmed on-device.
+void _diagLog(String message) {
+  if (kDebugMode) {
+    debugPrint('[songbook.db][diag] $message');
+  }
+}
 
 /// Database filename must stay `songbook.db` — the existing (pre-rewrite)
 /// Android app already ships a database with this name, and opening a
@@ -35,7 +59,10 @@ class SqliteLocalStorage implements LocalStorage {
       version: _databaseVersion,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
-      onOpen: (db) => _ensureSearchAliasesColumn(db),
+      onOpen: (db) async {
+        await _ensureSearchAliasesColumn(db);
+        await _cleanupOrphanedFolderSongs(db);
+      },
     );
     _songs = _SqliteSongRepository(_db!);
     _folders = _SqliteFolderRepository(_db!);
@@ -138,6 +165,18 @@ class SqliteLocalStorage implements LocalStorage {
       await db.execute('ALTER TABLE songs ADD COLUMN search_aliases TEXT');
     }
   }
+
+  /// Removes `folder_songs` rows left over from song deletions that predate
+  /// this fix (a song was deleted without also deleting its folder_songs
+  /// rows, leaving folder counts overstated). Only ever deletes rows in the
+  /// join table whose `song_id` no longer exists in `songs` — never touches
+  /// `songs` or `folders` themselves. Cheap and safe to re-run on every open.
+  static Future<void> _cleanupOrphanedFolderSongs(Database db) async {
+    await db.delete(
+      'folder_songs',
+      where: 'song_id NOT IN (SELECT id FROM songs)',
+    );
+  }
 }
 
 class _SqliteSongRepository implements SongRepository {
@@ -162,8 +201,53 @@ class _SqliteSongRepository implements SongRepository {
   @override
   Future<Song> create(Song song) async {
     final map = song.toDbMap()..remove('id');
-    final id = await _db.insert(_table, map);
-    return song.copyWith(id: id);
+    _diagLog('create(): calling _db.insert for "${song.title}"');
+    try {
+      final id = await _db.insert(_table, map).timeout(_writeTimeout);
+      _diagLog('create(): _db.insert returned id=$id');
+      return song.copyWith(id: id);
+    } on TimeoutException {
+      // The plugin call didn't reply in time. Rather than hang forever (the
+      // observed bug) or blindly retry the insert (which would duplicate
+      // the row if the original write actually did land), check whether it
+      // already committed and, if so, recover the id from it instead of
+      // inserting again.
+      _diagLog('create(): _db.insert timed out; checking whether it committed anyway');
+      final recovered = await _findJustInserted(map).timeout(
+        _writeTimeout,
+        onTimeout: () => null,
+      );
+      if (recovered != null) {
+        _diagLog('create(): recovered committed row id=${recovered.id}');
+        return recovered;
+      }
+      _diagLog('create(): no matching row found; rethrowing timeout');
+      rethrow;
+    }
+  }
+
+  /// Looks up the row a just-attempted (but unconfirmed) insert would have
+  /// produced, matching on the fields that make it unique in practice
+  /// (karaoke_type/song_number/title/created_at — created_at is the
+  /// millisecond-precision timestamp this specific create() call used, so a
+  /// match here is effectively unambiguous). Used only to recover from a
+  /// lost insert() reply, never to decide whether to insert in the first
+  /// place.
+  Future<Song?> _findJustInserted(Map<String, Object?> map) async {
+    final rows = await _db.query(
+      _table,
+      where: 'karaoke_type = ? AND song_number = ? AND title = ? AND created_at = ?',
+      whereArgs: [
+        map['karaoke_type'],
+        map['song_number'],
+        map['title'],
+        map['created_at'],
+      ],
+      orderBy: 'id DESC',
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return Song.fromDbMap(rows.first);
   }
 
   @override
@@ -171,17 +255,41 @@ class _SqliteSongRepository implements SongRepository {
     if (song.id == null) {
       throw ArgumentError('Cannot update a song without an id.');
     }
-    await _db.update(
-      _table,
-      song.toDbMap(),
-      where: 'id = ?',
-      whereArgs: [song.id],
-    );
+    final map = song.toDbMap();
+    _diagLog('update(): calling _db.update for id=${song.id}');
+    try {
+      await _db
+          .update(_table, map, where: 'id = ?', whereArgs: [song.id])
+          .timeout(_writeTimeout);
+      _diagLog('update(): _db.update returned');
+    } on TimeoutException {
+      // update() is naturally idempotent (same WHERE id = ?, same values),
+      // so — unlike create() — it's safe to simply retry once rather than
+      // needing a separate recovery lookup: if the first attempt's reply
+      // was merely lost after already committing, re-applying the same
+      // values is a no-op.
+      _diagLog('update(): _db.update timed out; retrying once');
+      await _db
+          .update(_table, map, where: 'id = ?', whereArgs: [song.id])
+          .timeout(_writeTimeout);
+      _diagLog('update(): retry completed');
+    }
   }
 
   @override
   Future<void> delete(int id) async {
-    await _db.delete(_table, where: 'id = ?', whereArgs: [id]);
+    // Deleting a song must also drop its folder_songs membership rows, or
+    // folder counts keep counting a song that no longer exists. Both writes
+    // happen in one transaction so a failure can't leave one without the
+    // other.
+    await _db.transaction((txn) async {
+      await txn.delete(
+        'folder_songs',
+        where: 'song_id = ?',
+        whereArgs: [id],
+      );
+      await txn.delete(_table, where: 'id = ?', whereArgs: [id]);
+    });
   }
 
   @override
@@ -261,11 +369,17 @@ class _SqliteFolderRepository implements FolderRepository {
 
   @override
   Future<List<int>> getSongIds(int folderId) async {
-    final rows = await _db.query(
-      _joinTable,
-      columns: ['song_id'],
-      where: 'folder_id = ?',
-      whereArgs: [folderId],
+    // Joined against `songs` so a folder_songs row left over from a song
+    // deletion (e.g. one that predates this fix, before the on-open
+    // cleanup runs) never counts as a member.
+    final rows = await _db.rawQuery(
+      '''
+      SELECT fs.song_id AS song_id
+      FROM $_joinTable fs
+      INNER JOIN songs s ON s.id = fs.song_id
+      WHERE fs.folder_id = ?
+      ''',
+      [folderId],
     );
     return rows.map((r) => r['song_id'] as int).toList();
   }

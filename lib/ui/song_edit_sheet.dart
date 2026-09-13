@@ -172,12 +172,21 @@ class _SongEditSheetState extends State<_SongEditSheet> {
       searchAliases: _aliases,
       updatedAt: now,
     );
+    // Temporary diagnostic logging for the Android save-hang investigation —
+    // safe to delete once the fix is confirmed on-device. Bisects whether a
+    // hang happens before the repository call, inside/after it, or during
+    // Navigator.pop().
+    debugPrint('[songbook.db][diag] _save(): before repository call (existing=${_existing?.id})');
     if (_existing == null) {
       await widget.storage.songs.create(song);
     } else {
       await widget.storage.songs.update(song);
     }
-    if (mounted) Navigator.of(context).pop();
+    debugPrint('[songbook.db][diag] _save(): repository call returned, mounted=$mounted');
+    if (mounted) {
+      Navigator.of(context).pop();
+      debugPrint('[songbook.db][diag] _save(): Navigator.pop() called');
+    }
   }
 
   @override

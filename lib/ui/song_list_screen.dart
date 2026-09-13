@@ -30,10 +30,10 @@ class SongListScreen extends StatefulWidget {
   const SongListScreen({super.key, required this.storage});
 
   @override
-  State<SongListScreen> createState() => _SongListScreenState();
+  State<SongListScreen> createState() => SongListScreenState();
 }
 
-class _SongListScreenState extends State<SongListScreen> {
+class SongListScreenState extends State<SongListScreen> {
   final _searchController = TextEditingController();
 
   List<Song> _allMatching = [];
@@ -56,6 +56,12 @@ class _SongListScreenState extends State<SongListScreen> {
     _searchController.dispose();
     super.dispose();
   }
+
+  /// Re-reads songs from the repository. Called on init, after local edits,
+  /// and by [AppShell] when this tab becomes visible, so a song added or
+  /// changed from another tab (e.g. TJ 검색) is reflected without needing a
+  /// manual refresh.
+  Future<void> refresh() => _reload();
 
   Future<void> _reload() async {
     final query = _searchController.text.trim();

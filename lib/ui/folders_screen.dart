@@ -16,10 +16,10 @@ class FoldersScreen extends StatefulWidget {
   const FoldersScreen({super.key, required this.storage});
 
   @override
-  State<FoldersScreen> createState() => _FoldersScreenState();
+  State<FoldersScreen> createState() => FoldersScreenState();
 }
 
-class _FoldersScreenState extends State<FoldersScreen> {
+class FoldersScreenState extends State<FoldersScreen> {
   List<Folder> _folders = [];
   Map<int, int> _counts = {};
   bool _loading = true;
@@ -29,6 +29,12 @@ class _FoldersScreenState extends State<FoldersScreen> {
     super.initState();
     _reload();
   }
+
+  /// Re-reads folders and their song counts from the repository. Called on
+  /// init and by [AppShell] when this tab becomes visible, so a folder
+  /// change made from another tab (e.g. adding/deleting a song) is reflected
+  /// without needing a manual refresh.
+  Future<void> refresh() => _reload();
 
   Future<void> _reload() async {
     setState(() => _loading = true);

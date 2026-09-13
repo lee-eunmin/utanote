@@ -17,27 +17,38 @@ class AppShell extends StatefulWidget {
   State<AppShell> createState() => _AppShellState();
 }
 
+const _songListTabIndex = 0;
+const _foldersTabIndex = 1;
 const _tjSearchTabIndex = 2;
 
 class _AppShellState extends State<AppShell> {
   int _index = 0;
+  final _songListKey = GlobalKey<SongListScreenState>();
+  final _foldersKey = GlobalKey<FoldersScreenState>();
   final _tjSearchKey = GlobalKey<TjSearchScreenState>();
 
   void _onTabTap(int i) {
     setState(() => _index = i);
-    // The IndexedStack keeps TjSearchScreen alive across tab switches, so a
-    // song added/edited from another tab wouldn't otherwise be reflected in
-    // its "추가됨" state until a new search ran.
-    if (i == _tjSearchTabIndex) {
-      _tjSearchKey.currentState?.refreshAddedSongs();
+    // The IndexedStack keeps every tab's screen alive across switches, so
+    // each top-level screen must explicitly refresh from the repository
+    // when it becomes visible again — otherwise data changed from another
+    // tab (a song added via TJ 검색, a folder membership change, a
+    // deletion, ...) wouldn't show up until the app restarts.
+    switch (i) {
+      case _songListTabIndex:
+        _songListKey.currentState?.refresh();
+      case _foldersTabIndex:
+        _foldersKey.currentState?.refresh();
+      case _tjSearchTabIndex:
+        _tjSearchKey.currentState?.refreshAddedSongs();
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final screens = [
-      SongListScreen(storage: widget.storage),
-      FoldersScreen(storage: widget.storage),
+      SongListScreen(key: _songListKey, storage: widget.storage),
+      FoldersScreen(key: _foldersKey, storage: widget.storage),
       TjSearchScreen(key: _tjSearchKey, storage: widget.storage),
     ];
     return Scaffold(
