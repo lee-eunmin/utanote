@@ -8,7 +8,7 @@ const {
   parseSection,
   searchRelevant,
   TJ_STR_TYPE,
-  rankByRelevance,
+  rankBySource,
 } = require('../../api/tj-search.js');
 
 function loadFixture(name) {
@@ -103,13 +103,18 @@ test('searchRelevant merges title and artist categories, deduped by songNumber, 
 
   const results = await searchRelevant('anything');
 
-  // 11111 (title only), 22222 (title + artist, deduped to one), 33333 (artist only).
+  // 22222 and 33333 both came back from the ARTIST search (tier 1), so they
+  // rank ahead of 11111, a title-only broad fallback match (tier 3). 22222
+  // also appears in the TITLE results, but since ARTIST gives it the better
+  // tier, it's deduped down to a single copy ranked with the ARTIST-sourced
+  // results, in TJ's original ARTIST order (22222 before 33333).
   assert.deepEqual(
     results.map((r) => r.songNumber),
-    ['11111', '22222', '33333']
+    ['22222', '33333', '11111']
   );
-  // The de-duped 22222 keeps the first (title-category) occurrence.
-  assert.equal(results[1].title, 'Another Title');
+  // The de-duped 22222 has the same title either way, since both fixtures
+  // agree on it.
+  assert.equal(results[0].title, 'Another Title');
 
   // Never hit the song-number category for a non-numeric query.
   const requestedStrTypes = fetchMock.mock.calls.map(
@@ -134,44 +139,65 @@ test('searchRelevant searches only by song number for all-digit queries', async 
   );
 });
 
-test('rankByRelevance orders artist-exact > artist-contains > title-exact > title-contains > other, preserving order within a tier', () => {
-  const results = [
-    { songNumber: '1', title: 'Other Song', artist: 'Someone Else' },
-    { songNumber: '2', title: 'A Title', artist: 'query Band' }, // artist contains
-    { songNumber: '3', title: 'query', artist: 'Another Artist' }, // title exact
-    { songNumber: '4', title: 'query song', artist: 'Yet Another' }, // title contains
-    { songNumber: '5', title: 'Second Other', artist: 'Nobody' },
-    { songNumber: '6', title: 'Unrelated', artist: 'query' }, // artist exact
+test('rankBySource orders title-exact > any artist-search result > title-contains > other title fallback, preserving order within a tier', () => {
+  const titleResults = [
+    { songNumber: '1', title: 'Other Song', artist: 'Someone Else' }, // tier 3
+    { songNumber: '3', title: 'query', artist: 'Another Artist' }, // tier 0 (title exact)
+    { songNumber: '4', title: 'query song', artist: 'Yet Another' }, // tier 2 (title contains)
+    { songNumber: '5', title: 'Second Other', artist: 'Nobody' }, // tier 3
+  ];
+  const artistResults = [
+    { songNumber: '6', title: 'Unrelated', artist: 'query' }, // tier 1
+    { songNumber: '2', title: 'A Title', artist: 'query Band' }, // tier 1
   ];
 
-  const ranked = rankByRelevance(results, 'query');
+  const ranked = rankBySource(titleResults, artistResults, 'query');
 
   assert.deepEqual(
     ranked.map((r) => r.songNumber),
-    ['6', '2', '3', '4', '1', '5']
+    ['3', '6', '2', '4', '1', '5']
   );
 });
 
-test('rankByRelevance ignores case and spacing differences between query and artist/title', () => {
-  const results = [
+test('rankBySource ignores case and spacing differences between query and title', () => {
+  const titleResults = [
     { songNumber: '1', title: 'Something', artist: 'Someone' },
-    { songNumber: '2', title: 'Something', artist: ' Query  Band ' },
+    { songNumber: '2', title: '  Query  ', artist: 'Someone Else' },
   ];
 
-  const ranked = rankByRelevance(results, 'QUERY');
+  const ranked = rankBySource(titleResults, [], 'QUERY');
 
   assert.deepEqual(ranked.map((r) => r.songNumber), ['2', '1']);
 });
 
-test('rankByRelevance treats a result with no artist as never artist-matching', () => {
-  const results = [
-    { songNumber: '1', title: 'query title', artist: '' },
-    { songNumber: '2', title: 'Unrelated', artist: 'query' },
+test('rankBySource ranks every ARTIST-search result in tier 1 regardless of the literal artist string, not just literal query matches', () => {
+  // TJ's ARTIST search itself is trusted as the relevance signal here (see
+  // the doc comment on rankBySource) - a result with an artist string that
+  // shares nothing with the query still outranks a broad TITLE fallback.
+  const titleResults = [
+    { songNumber: '1', title: 'Unrelated broad match', artist: 'Nobody' }, // tier 3
+  ];
+  const artistResults = [
+    { songNumber: '2', title: 'Some Song', artist: 'Completely Different Name' }, // tier 1
   ];
 
-  const ranked = rankByRelevance(results, 'query');
+  const ranked = rankBySource(titleResults, artistResults, 'query');
 
   assert.deepEqual(ranked.map((r) => r.songNumber), ['2', '1']);
+});
+
+test('rankBySource keeps a songNumber appearing in both categories once, at the better tier', () => {
+  const titleResults = [
+    { songNumber: '1', title: 'Unrelated Broad Title', artist: 'Someone' }, // tier 3
+  ];
+  const artistResults = [
+    { songNumber: '1', title: 'Unrelated Broad Title', artist: 'Someone' }, // tier 1
+  ];
+
+  const ranked = rankBySource(titleResults, artistResults, 'query');
+
+  assert.equal(ranked.length, 1);
+  assert.equal(ranked[0].songNumber, '1');
 });
 
 test('searchRelevant ranks an exact artist/title match above TJ\'s broader weakly-related matches for a broad query', async (t) => {
@@ -186,13 +212,38 @@ test('searchRelevant ranks an exact artist/title match above TJ\'s broader weakl
 
   const results = await searchRelevant('아이유');
 
-  // 50001: exact artist match ("아이유"). 50006: exact title match
-  // ("아이유"). The rest are TJ's broad title matches, still present but
-  // ranked last, in their original TJ order.
+  // 50006: exact title match ("아이유") - tier 0. 50001: came back from the
+  // ARTIST search - tier 1. The rest are TJ's broad title matches, still
+  // present but ranked last, in their original TJ order.
   assert.deepEqual(
     results.map((r) => r.songNumber),
-    ['50001', '50006', '50002', '50003', '50004', '50005']
+    ['50006', '50001', '50002', '50003', '50004', '50005']
   );
+});
+
+test('searchRelevant ranks an ARTIST-source alias match (TJ resolving "아이유" to displayed artist "IU") ahead of broad TITLE-source fallbacks', async (t) => {
+  // Regression test for the specific case reported: TJ's ARTIST search can
+  // match a Korean query to a song whose *displayed* artist name is an
+  // entirely different string (e.g. an English stage name, "IU"), with no
+  // literal overlap with the query at all. That result must still outrank
+  // TJ's broad, weakly-related TITLE-search fallbacks (e.g. "그 아이",
+  // "돌아이") rather than falling to the bottom for failing a literal
+  // artist-string comparison.
+  const fetchMock = stubFetchByStrType({
+    [TJ_STR_TYPE.TITLE]: loadFixture('iu-alias-title-results.html'),
+    [TJ_STR_TYPE.ARTIST]: loadFixture('iu-alias-artist-results.html'),
+  });
+  t.after(() => fetchMock.mock.restore());
+
+  const results = await searchRelevant('아이유');
+
+  // 60001 (artist "IU", from the ARTIST search) must rank ahead of 50002
+  // ("그 아이") and 50003 ("돌아이"), both broad TITLE-source fallbacks.
+  assert.deepEqual(
+    results.map((r) => r.songNumber),
+    ['60001', '50002', '50003']
+  );
+  assert.equal(results[0].artist, 'IU');
 });
 
 test('searchRelevant excludes lyricist/composer-only matches by construction', async (t) => {

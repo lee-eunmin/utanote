@@ -146,44 +146,73 @@ function normalizeForMatch(text) {
   return (text || '').toLowerCase().replace(/\s+/g, '');
 }
 
-// Lower tier number = more relevant. Tier 5 is TJ's own broad match (title
-// or artist search hit it for some other reason — alias, romanization,
-// Japanese title, etc.) and is never dropped, only sorted last.
-function relevanceTier(result, normQuery) {
-  const normArtist = normalizeForMatch(result.artist);
+// Tier for a TITLE-search result, based on how the normalized title relates
+// to the normalized query. (ARTIST-search results never go through this —
+// see rankBySource — because literal comparison against the displayed
+// artist string is not a reliable relevance signal for them.)
+//   0 = normalized title exactly equals the query
+//   2 = normalized title contains the query
+//   3 = broad TJ title-search fallback (matched for some other reason —
+//       alias, romanization, lyrics, etc.)
+function titleTier(result, normQuery) {
   const normTitle = normalizeForMatch(result.title);
-
-  if (normArtist && normArtist === normQuery) return 1;
-  if (normArtist && normArtist.includes(normQuery)) return 2;
-  if (normTitle === normQuery) return 3;
-  if (normTitle.includes(normQuery)) return 4;
-  return 5;
+  if (normTitle === normQuery) return 0;
+  if (normTitle.includes(normQuery)) return 2;
+  return 3;
 }
 
-// Stable sort into relevance tiers (artist-exact, artist-contains,
-// title-exact, title-contains, other) without dropping any results, so
-// broad/alias TJ matches are still returned — just ranked after the
-// obviously-relevant ones. Order within a tier is preserved via the index
-// tie-break, since Array.prototype.sort is not guaranteed stable in every
-// engine.
-function rankByRelevance(results, query) {
+// Source-aware relevance ranking. Merges TJ's TITLE and ARTIST category
+// results into one deduplicated-by-songNumber list, ranked as:
+//   Tier 0 - TITLE-search result whose normalized title == query
+//   Tier 1 - ANY result returned by TJ's ARTIST search
+//   Tier 2 - TITLE-search result whose normalized title contains query
+//   Tier 3 - remaining broad TITLE-search fallback results
+//
+// Tier 1 deliberately does NOT require the displayed artist string to
+// literally match the query. TJ's own ARTIST search already resolves
+// aliases/transliterations on its end — e.g. searching "아이유" can match a
+// song whose displayed artist is "IU" — so a literal artist-string
+// comparison here would defeat the point of using TJ's ARTIST category at
+// all and drop exactly the results it exists to surface. Trusting "TJ's
+// ARTIST search returned this" as the relevance signal (rather than
+// re-deriving it from the artist string) is what makes this source-aware
+// rather than literal-match-based.
+//
+// If a songNumber appears in both categories, only one copy is kept, at
+// whichever tier is better (lower). Within a tier, TJ's original order is
+// preserved.
+function rankBySource(titleResults, artistResults, query) {
   const normQuery = normalizeForMatch(query);
-  return results
-    .map((result, index) => ({
-      result,
-      index,
-      tier: relevanceTier(result, normQuery),
-    }))
-    .sort((a, b) => a.tier - b.tier || a.index - b.index)
+  const bySongNumber = new Map();
+
+  const consider = (result, tier, order) => {
+    const existing = bySongNumber.get(result.songNumber);
+    if (!existing || tier < existing.tier) {
+      bySongNumber.set(result.songNumber, { result, tier, order });
+    }
+  };
+
+  titleResults.forEach((result, index) => {
+    consider(result, titleTier(result, normQuery), index);
+  });
+  // Every ARTIST-search result lands in tier 1, regardless of its literal
+  // artist string (see doc comment above).
+  artistResults.forEach((result, index) => {
+    consider(result, 1, titleResults.length + index);
+  });
+
+  return [...bySongNumber.values()]
+    .sort((a, b) => a.tier - b.tier || a.order - b.order)
     .map((entry) => entry.result);
 }
 
 /// Searches only the categories relevant to our app (title, artist, song
 /// number) so TJ's lyricist/composer/medley-only matches — which our API
 /// doesn't expose and would otherwise look like irrelevant noise — never
-/// appear in the response. Merged and deduplicated by songNumber, then
-/// ranked by relevance (see rankByRelevance) so an exact/close artist or
-/// title match sorts before TJ's broader fuzzy matches.
+/// appear in the response. Merged, deduplicated by songNumber, and ranked
+/// by source-aware relevance (see rankBySource) so an exact title match or
+/// any artist-search hit sorts before TJ's broader title-only fuzzy
+/// matches.
 ///
 /// This deliberately does NOT add literal post-filtering on top of TJ's own
 /// title/artist matching — TJ's artist search can surface useful aliases or
@@ -202,14 +231,7 @@ async function searchRelevant(query) {
     searchByCategory(query, 'ARTIST'),
   ]);
 
-  const merged = [];
-  const seen = new Set();
-  for (const result of [...titleResults, ...artistResults]) {
-    if (seen.has(result.songNumber)) continue;
-    seen.add(result.songNumber);
-    merged.push(result);
-  }
-  return rankByRelevance(merged, query);
+  return rankBySource(titleResults, artistResults, query);
 }
 
 module.exports = async (req, res) => {
@@ -266,4 +288,4 @@ module.exports = async (req, res) => {
 module.exports.parseSection = parseSection;
 module.exports.searchRelevant = searchRelevant;
 module.exports.TJ_STR_TYPE = TJ_STR_TYPE;
-module.exports.rankByRelevance = rankByRelevance;
+module.exports.rankBySource = rankBySource;
