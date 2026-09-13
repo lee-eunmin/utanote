@@ -24,13 +24,13 @@ void main() {
       await tester.enterText(find.byKey(const Key('songTitleField')), '夜に駆ける');
 
       // Add two search aliases via the chip input.
-      await tester.tap(find.text('+ 추가'));
+      await tester.tap(find.text('+ 별칭 추가'));
       await tester.pumpAndSettle();
       await tester.enterText(find.byKey(const Key('songAliasField')), '밤을 달리다');
       await tester.tap(find.byKey(const Key('confirmAliasButton')));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.text('+ 추가'));
+      await tester.tap(find.text('+ 별칭 추가'));
       await tester.pumpAndSettle();
       await tester.enterText(find.byKey(const Key('songAliasField')), '요루니카케루');
       await tester.tap(find.byKey(const Key('confirmAliasButton')));

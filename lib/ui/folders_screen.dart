@@ -108,9 +108,9 @@ class _FoldersScreenState extends State<FoldersScreen> {
                             gridDelegate:
                                 const SliverGridDelegateWithFixedCrossAxisCount(
                                   crossAxisCount: 2,
-                                  mainAxisSpacing: 12,
-                                  crossAxisSpacing: 12,
-                                  childAspectRatio: 1.15,
+                                  mainAxisSpacing: 10,
+                                  crossAxisSpacing: 10,
+                                  childAspectRatio: 2.6,
                                 ),
                             delegate: SliverChildBuilderDelegate((context, i) {
                               final folder = _folders[i];
@@ -177,37 +177,50 @@ class _FolderCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
             children: [
               Container(
-                width: 38,
-                height: 38,
+                width: 32,
+                height: 32,
                 decoration: BoxDecoration(
                   color: accent.withValues(alpha: 0.16),
-                  borderRadius: BorderRadius.circular(9),
+                  borderRadius: BorderRadius.circular(8),
                 ),
-                child: Icon(Icons.folder_rounded, color: accent, size: 19),
+                child: Icon(Icons.folder_rounded, color: accent, size: 16),
               ),
-              const Spacer(),
-              Text(
-                folder.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 15.5,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.textPrimary,
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      folder.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 14.5,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '$count곡',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 3),
-              Text(
-                '$count곡',
-                style: const TextStyle(
-                  fontSize: 12.5,
-                  color: AppColors.textSecondary,
-                ),
+              const SizedBox(width: 4),
+              const Icon(
+                Icons.chevron_right_rounded,
+                size: 18,
+                color: AppColors.textTertiary,
               ),
             ],
           ),

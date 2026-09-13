@@ -15,7 +15,9 @@ class AppColors {
   static const textPrimary = Color(0xFFF3F1ED);
   static const textSecondary = Color(0xFF9A99A1);
   static const textTertiary = Color(0xFF67666D);
+  static const textPlaceholder = Color(0xFFACABB3);
   static const hairline = Color(0xFF28282C);
+  static const fieldBorder = Color(0xFF35343B);
   static const danger = Color(0xFFD9635C);
 
   static const statusNotStarted = Color(0xFF57565D);
@@ -143,16 +145,19 @@ ThemeData buildAppTheme() {
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: AppColors.surfaceHigh,
-      hintStyle: const TextStyle(color: AppColors.textSecondary, fontSize: 14),
+      fillColor: AppColors.surfacePressed,
+      hintStyle: const TextStyle(
+        color: AppColors.textPlaceholder,
+        fontSize: 14,
+      ),
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
-        borderSide: BorderSide.none,
+        borderSide: const BorderSide(color: AppColors.fieldBorder, width: 1),
       ),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
-        borderSide: BorderSide.none,
+        borderSide: const BorderSide(color: AppColors.fieldBorder, width: 1),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),

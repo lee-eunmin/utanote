@@ -6,7 +6,16 @@ import '../storage/local_storage.dart';
 import '../theme/app_theme.dart';
 import 'widgets/choice_chip_row.dart';
 
-/// Opens the polished modal bottom sheet used to create or edit a song.
+/// Width at or above which the add/edit form shows as a centered dialog
+/// instead of a mobile-style bottom sheet.
+const double _wideLayoutBreakpoint = 720;
+
+/// Opens the song add/edit form.
+///
+/// On narrow (mobile) viewports this is the polished modal bottom sheet.
+/// On wide (web/desktop) viewports it's shown as a centered modal dialog
+/// with a sensible max width/height instead, since a full-height bottom
+/// sheet reads as a mobile pattern there.
 ///
 /// Karaoke-company (TJ/KY) selection is intentionally not exposed here:
 /// new songs always default to 'TJ', while an existing song (which may be
@@ -17,6 +26,22 @@ Future<void> showSongEditSheet({
   required LocalStorage storage,
   Song? existing,
 }) {
+  final isWide = MediaQuery.sizeOf(context).width >= _wideLayoutBreakpoint;
+  if (isWide) {
+    return showDialog<void>(
+      context: context,
+      builder: (context) => Dialog(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 480, maxHeight: 640),
+          child: _SongEditSheet(
+            storage: storage,
+            existing: existing,
+            isDialog: true,
+          ),
+        ),
+      ),
+    );
+  }
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
@@ -29,8 +54,13 @@ Future<void> showSongEditSheet({
 class _SongEditSheet extends StatefulWidget {
   final LocalStorage storage;
   final Song? existing;
+  final bool isDialog;
 
-  const _SongEditSheet({required this.storage, this.existing});
+  const _SongEditSheet({
+    required this.storage,
+    this.existing,
+    this.isDialog = false,
+  });
 
   @override
   State<_SongEditSheet> createState() => _SongEditSheetState();
@@ -128,7 +158,18 @@ class _SongEditSheetState extends State<_SongEditSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final isEditing = _existing != null;
+    if (widget.isDialog) {
+      return Padding(
+        padding: const EdgeInsets.all(20),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: _formFields(context),
+          ),
+        ),
+      );
+    }
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
       child: SafeArea(
@@ -155,183 +196,178 @@ class _SongEditSheetState extends State<_SongEditSheet> {
                     ),
                   ),
                 ),
-                Row(
-                  children: [
-                    Text(
-                      isEditing ? '노래 수정' : '노래 추가',
-                      style: AppTextStyles.sheetTitle,
-                    ),
-                    const Spacer(),
-                    InkResponse(
-                      onTap: () => Navigator.of(context).pop(),
-                      radius: 20,
-                      child: const Padding(
-                        padding: EdgeInsets.all(4),
-                        child: Icon(
-                          Icons.close_rounded,
-                          size: 20,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: _Field(
-                        label: '번호',
-                        child: TextField(
-                          key: const Key('songNumberField'),
-                          controller: _numberController,
-                          decoration: const InputDecoration(hintText: '곡 번호'),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      flex: 2,
-                      child: _Field(
-                        label: '제목',
-                        child: TextField(
-                          key: const Key('songTitleField'),
-                          controller: _titleController,
-                          decoration: const InputDecoration(hintText: '노래 제목'),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 14),
-                _Field(
-                  label: '가수 (선택)',
-                  child: TextField(
-                    key: const Key('songArtistField'),
-                    controller: _artistController,
-                    decoration: const InputDecoration(hintText: '가수'),
-                  ),
-                ),
-                const SizedBox(height: 14),
-                _Field(
-                  label: '검색 별칭',
-                  child: Wrap(
-                    spacing: 7,
-                    runSpacing: 7,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      for (final alias in _aliases)
-                        _AliasChip(
-                          label: alias,
-                          onRemove: () =>
-                              setState(() => _aliases.remove(alias)),
-                        ),
-                      if (_addingAlias)
-                        SizedBox(
-                          width: 150,
-                          height: 30,
-                          child: TextField(
-                            key: const Key('songAliasField'),
-                            autofocus: true,
-                            controller: _aliasInputController,
-                            style: const TextStyle(fontSize: 13),
-                            decoration: InputDecoration(
-                              isDense: true,
-                              hintText: '별칭 입력',
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 6,
-                              ),
-                              suffixIcon: InkResponse(
-                                key: const Key('confirmAliasButton'),
-                                onTap: () =>
-                                    _commitAlias(_aliasInputController.text),
-                                child: const Icon(
-                                  Icons.check_rounded,
-                                  size: 16,
-                                ),
-                              ),
-                              suffixIconConstraints: const BoxConstraints(
-                                minWidth: 32,
-                              ),
-                            ),
-                            onSubmitted: _commitAlias,
-                          ),
-                        )
-                      else
-                        _AddAliasChip(
-                          onTap: () => setState(() => _addingAlias = true),
-                        ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 14),
-                _Field(
-                  label: '기준키',
-                  child: ChoiceChipRow<String>(
-                    options: kKeyTypes,
-                    value: _keyType,
-                    labelBuilder: (v) => v,
-                    onChanged: (v) => setState(() => _keyType = v),
-                  ),
-                ),
-                const SizedBox(height: 14),
-                _Field(
-                  label: '키 조정',
-                  child: ChoiceChipRow<int>(
-                    options: kKeyOffsets,
-                    value: _keyOffset,
-                    labelBuilder: formatKeyOffset,
-                    onChanged: (v) => setState(() => _keyOffset = v),
-                  ),
-                ),
-                const SizedBox(height: 14),
-                _Field(
-                  label: '난이도',
-                  child: ChoiceChipRow<String>(
-                    options: kDifficulties,
-                    value: _difficulty,
-                    labelBuilder: (v) => v,
-                    onChanged: (v) => setState(() => _difficulty = v),
-                  ),
-                ),
-                const SizedBox(height: 14),
-                _Field(
-                  label: '상태',
-                  child: ChoiceChipRow<String>(
-                    options: kPracticeStatuses,
-                    value: _practiceStatus,
-                    labelBuilder: (v) => v,
-                    onChanged: (v) => setState(() => _practiceStatus = v),
-                  ),
-                ),
-                const SizedBox(height: 24),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        key: const Key('cancelSongButton'),
-                        onPressed: () => Navigator.of(context).pop(),
-                        child: const Text('취소'),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: FilledButton(
-                        key: const Key('saveSongButton'),
-                        onPressed: _saving ? null : _save,
-                        child: const Text('저장'),
-                      ),
-                    ),
-                  ],
-                ),
+                ..._formFields(context),
               ],
             ),
           ),
         ),
       ),
     );
+  }
+
+  List<Widget> _formFields(BuildContext context) {
+    final isEditing = _existing != null;
+    return [
+      Row(
+        children: [
+          Text(isEditing ? '노래 수정' : '노래 추가', style: AppTextStyles.sheetTitle),
+          const Spacer(),
+          InkResponse(
+            onTap: () => Navigator.of(context).pop(),
+            radius: 20,
+            child: const Padding(
+              padding: EdgeInsets.all(4),
+              child: Icon(
+                Icons.close_rounded,
+                size: 20,
+                color: AppColors.textSecondary,
+              ),
+            ),
+          ),
+        ],
+      ),
+      const SizedBox(height: 12),
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: _Field(
+              label: '번호',
+              child: TextField(
+                key: const Key('songNumberField'),
+                controller: _numberController,
+                decoration: const InputDecoration(hintText: '곡 번호'),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            flex: 2,
+            child: _Field(
+              label: '제목',
+              child: TextField(
+                key: const Key('songTitleField'),
+                controller: _titleController,
+                decoration: const InputDecoration(hintText: '노래 제목'),
+              ),
+            ),
+          ),
+        ],
+      ),
+      const SizedBox(height: 14),
+      _Field(
+        label: '가수 (선택)',
+        child: TextField(
+          key: const Key('songArtistField'),
+          controller: _artistController,
+          decoration: const InputDecoration(hintText: '가수'),
+        ),
+      ),
+      const SizedBox(height: 14),
+      _Field(
+        label: '검색 별칭',
+        child: Wrap(
+          spacing: 7,
+          runSpacing: 7,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            for (final alias in _aliases)
+              _AliasChip(
+                label: alias,
+                onRemove: () => setState(() => _aliases.remove(alias)),
+              ),
+            if (_addingAlias)
+              SizedBox(
+                width: 150,
+                height: 30,
+                child: TextField(
+                  key: const Key('songAliasField'),
+                  autofocus: true,
+                  controller: _aliasInputController,
+                  style: const TextStyle(fontSize: 13),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    hintText: '별칭 입력',
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    suffixIcon: InkResponse(
+                      key: const Key('confirmAliasButton'),
+                      onTap: () => _commitAlias(_aliasInputController.text),
+                      child: const Icon(Icons.check_rounded, size: 16),
+                    ),
+                    suffixIconConstraints: const BoxConstraints(minWidth: 32),
+                  ),
+                  onSubmitted: _commitAlias,
+                ),
+              )
+            else
+              _AddAliasChip(onTap: () => setState(() => _addingAlias = true)),
+          ],
+        ),
+      ),
+      const SizedBox(height: 14),
+      _Field(
+        label: '기준키',
+        child: ChoiceChipRow<String>(
+          options: kKeyTypes,
+          value: _keyType,
+          labelBuilder: (v) => v,
+          onChanged: (v) => setState(() => _keyType = v),
+        ),
+      ),
+      const SizedBox(height: 14),
+      _Field(
+        label: '키 조정',
+        child: ChoiceChipRow<int>(
+          options: kKeyOffsets,
+          value: _keyOffset,
+          labelBuilder: formatKeyOffset,
+          onChanged: (v) => setState(() => _keyOffset = v),
+        ),
+      ),
+      const SizedBox(height: 14),
+      _Field(
+        label: '난이도',
+        child: ChoiceChipRow<String>(
+          options: kDifficulties,
+          value: _difficulty,
+          labelBuilder: (v) => v,
+          onChanged: (v) => setState(() => _difficulty = v),
+        ),
+      ),
+      const SizedBox(height: 14),
+      _Field(
+        label: '상태',
+        child: ChoiceChipRow<String>(
+          options: kPracticeStatuses,
+          value: _practiceStatus,
+          labelBuilder: (v) => v,
+          onChanged: (v) => setState(() => _practiceStatus = v),
+        ),
+      ),
+      const SizedBox(height: 24),
+      Row(
+        children: [
+          Expanded(
+            child: OutlinedButton(
+              key: const Key('cancelSongButton'),
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('취소'),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: FilledButton(
+              key: const Key('saveSongButton'),
+              onPressed: _saving ? null : _save,
+              child: const Text('저장'),
+            ),
+          ),
+        ],
+      ),
+    ];
   }
 }
 
@@ -419,7 +455,7 @@ class _AddAliasChip extends StatelessWidget {
           ),
         ),
         child: const Text(
-          '+ 추가',
+          '+ 별칭 추가',
           style: TextStyle(
             fontSize: 13,
             color: AppColors.accent,
