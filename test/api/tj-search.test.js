@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { parseResults, searchRelevant, TJ_STR_TYPE } = require('../../api/tj-search.js');
+const { parseSection, searchRelevant, TJ_STR_TYPE } = require('../../api/tj-search.js');
 
 function loadFixture(name) {
   return fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8');
@@ -24,9 +24,9 @@ function stubFetchByStrType(fixturesByStrType) {
   });
 }
 
-test('parses rows into normalized results and de-dupes by songNumber', () => {
+test('parses rows from the 곡 제목 section into normalized results, de-duped by songNumber', () => {
   const html = loadFixture('sample-results.html');
-  const results = parseResults(html);
+  const results = parseSection(html, 'TITLE');
 
   assert.equal(results.length, 2);
 
@@ -47,13 +47,46 @@ test('parses rows into normalized results and de-dupes by songNumber', () => {
   }
 });
 
+test('parses rows from the 가수 section independently of the 곡 제목 section', () => {
+  const html = loadFixture('sample-results.html');
+  const results = parseSection(html, 'ARTIST');
+
+  // sample-results.html's 가수 section repeats only song 28834.
+  assert.deepEqual(results, [
+    { songNumber: '28834', title: "さよならエレジー(ドラマ'トドメの接吻' OST)", artist: '菅田将暉' },
+  ]);
+});
+
 test('returns an empty array when TJ reports no matches', () => {
   const html = loadFixture('no-results.html');
-  assert.deepEqual(parseResults(html), []);
+  assert.deepEqual(parseSection(html, 'TITLE'), []);
 });
 
 test('does not throw on markup with no result rows at all', () => {
-  assert.deepEqual(parseResults('<html><body>unexpected</body></html>'), []);
+  assert.deepEqual(parseSection('<html><body>unexpected</body></html>', 'TITLE'), []);
+});
+
+test('parseSection only collects rows from the matching section, never 작사가/작곡가/메들리 or the other of title/artist/곡번호', () => {
+  const html = loadFixture('all-sections-results.html');
+
+  assert.deepEqual(parseSection(html, 'TITLE'), [
+    { songNumber: '10001', title: 'Title Section Song', artist: 'Title Section Artist' },
+  ]);
+  assert.deepEqual(parseSection(html, 'ARTIST'), [
+    { songNumber: '10002', title: 'Artist Section Song', artist: 'Artist Section Artist' },
+  ]);
+  assert.deepEqual(parseSection(html, 'SONG_NUMBER'), [
+    { songNumber: '10005', title: 'Song Number Section Song', artist: 'Song Number Section Artist' },
+  ]);
+
+  // None of our three categories may ever surface the 작사가(10003)/
+  // 작곡가(10004)/메들리(10006) rows, even though they're on the same page.
+  const allowedSongNumbers = new Set(['10001', '10002', '10005']);
+  for (const category of ['TITLE', 'ARTIST', 'SONG_NUMBER']) {
+    for (const result of parseSection(html, category)) {
+      assert.ok(allowedSongNumbers.has(result.songNumber), `unexpected songNumber ${result.songNumber} leaked from a ${category} parse`);
+    }
+  }
 });
 
 test('searchRelevant merges title and artist categories, deduped by songNumber, for non-numeric queries', async (t) => {
@@ -98,7 +131,7 @@ test('searchRelevant searches only by song number for all-digit queries', async 
 
 test('searchRelevant excludes lyricist/composer-only matches by construction', async (t) => {
   // Even though the fixtures include title5/title6 (lyricist/composer) text
-  // on every row, parseResults never reads those fields, and searchRelevant
+  // on every row, parseSection never reads those fields, and searchRelevant
   // never requests TJ's lyricist/composer categories in the first place.
   const fetchMock = stubFetchByStrType({
     [TJ_STR_TYPE.TITLE]: loadFixture('title-only-results.html'),

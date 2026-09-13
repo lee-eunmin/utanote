@@ -46,27 +46,50 @@ const TJ_STR_TYPE = {
   SONG_NUMBER: '16',
 };
 
-/// Parses a single-category TJ Media accompaniment_search results page into
+// TJ renders each category as its own "곡 제목 / 가수 / 작사가 / 작곡가 /
+// 곡 번호 / 메들리" section (a div.music-search-list with an <h2> heading),
+// each containing its own "grid-container list" rows. Requesting a single
+// strType is *usually* enough to get back only that one section, but we
+// still gate parsing on the heading text itself rather than trusting that —
+// so a lyricist/composer/medley section can never contribute rows even if
+// TJ ever renders more than the requested category on the same response.
+// Headings are compared with whitespace stripped ("곡 번호" vs "곡번호").
+const TJ_SECTION_HEADING = {
+  TITLE: '곡제목',
+  ARTIST: '가수',
+  SONG_NUMBER: '곡번호',
+};
+
+function normalizeHeading(text) {
+  return text.replace(/\s+/g, '');
+}
+
+/// Parses only the rows that live under the TJ result section whose <h2>
+/// heading matches `category` (one of the TJ_SECTION_HEADING keys), into
 /// normalized {songNumber, title, artist} rows, deduplicated by songNumber.
-///
-/// TJ renders one "grid-container list" per matched row. We read every such
-/// row on the page; callers are expected to request a single category
-/// (title/artist/song number) via strType so that lyricist/composer/medley
-/// matches never appear here.
-function parseResults(html) {
+/// Rows under any other section — including 작사가/작곡가/메들리 — are
+/// never read, regardless of what else is present on the page.
+function parseSection(html, category) {
+  const expectedHeading = TJ_SECTION_HEADING[category];
   const $ = cheerio.load(html);
   const results = [];
   const seen = new Set();
 
-  $('ul.grid-container.list').each((_, el) => {
-    const row = $(el);
-    const songNumber = row.find('.grid-item.pos-type .num2').first().text().trim();
-    const title = row.find('.grid-item.title3 p span').first().text().trim();
-    const artist = row.find('.grid-item.title4.singer span').first().text().trim();
+  $('div.music-search-list').each((_, sectionEl) => {
+    const section = $(sectionEl);
+    const heading = normalizeHeading(section.find('h2').first().text());
+    if (heading !== expectedHeading) return;
 
-    if (!songNumber || !title || seen.has(songNumber)) return;
-    seen.add(songNumber);
-    results.push({ songNumber, title, artist: artist || '' });
+    section.find('ul.grid-container.list').each((_, el) => {
+      const row = $(el);
+      const songNumber = row.find('.grid-item.pos-type .num2').first().text().trim();
+      const title = row.find('.grid-item.title3 p span').first().text().trim();
+      const artist = row.find('.grid-item.title4.singer span').first().text().trim();
+
+      if (!songNumber || !title || seen.has(songNumber)) return;
+      seen.add(songNumber);
+      results.push({ songNumber, title, artist: artist || '' });
+    });
   });
 
   return results;
@@ -105,10 +128,10 @@ async function fetchTjHtml(query, strType) {
   }
 }
 
-async function searchByCategory(query, strType) {
-  const html = await fetchTjHtml(query, strType);
+async function searchByCategory(query, category) {
+  const html = await fetchTjHtml(query, TJ_STR_TYPE[category]);
   try {
-    return parseResults(html);
+    return parseSection(html, category);
   } catch (err) {
     err.isParseError = true;
     throw err;
@@ -119,16 +142,20 @@ async function searchByCategory(query, strType) {
 /// number) so TJ's lyricist/composer/medley-only matches — which our API
 /// doesn't expose and would otherwise look like irrelevant noise — never
 /// appear in the response. Merged and deduplicated by songNumber.
+///
+/// This deliberately does NOT add literal post-filtering on top of TJ's own
+/// title/artist matching — TJ's artist search can surface useful aliases or
+/// romanizations that a literal substring filter would drop.
 async function searchRelevant(query) {
   const isNumeric = /^\d+$/.test(query);
 
   if (isNumeric) {
-    return searchByCategory(query, TJ_STR_TYPE.SONG_NUMBER);
+    return searchByCategory(query, 'SONG_NUMBER');
   }
 
   const [titleResults, artistResults] = await Promise.all([
-    searchByCategory(query, TJ_STR_TYPE.TITLE),
-    searchByCategory(query, TJ_STR_TYPE.ARTIST),
+    searchByCategory(query, 'TITLE'),
+    searchByCategory(query, 'ARTIST'),
   ]);
 
   const merged = [];
@@ -192,6 +219,6 @@ module.exports = async (req, res) => {
 
 // Exposed for fixture-based unit testing (see test/api/tj-search.test.js).
 // Vercel only uses the default export above as the request handler.
-module.exports.parseResults = parseResults;
+module.exports.parseSection = parseSection;
 module.exports.searchRelevant = searchRelevant;
 module.exports.TJ_STR_TYPE = TJ_STR_TYPE;
