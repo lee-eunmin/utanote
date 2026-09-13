@@ -1,5 +1,17 @@
 import 'dart:convert';
 
+/// The app's default song ordering: newest-created first ([Song.createdAt]
+/// descending), falling back to [Song.id] descending as a stable
+/// tie-breaker when two songs share the same `created_at`. Never uses
+/// [Song.updatedAt] — editing a song must not move it in this ordering.
+/// Shared by every [LocalStorage] implementation (Android/Web/in-memory) so
+/// they all sort the same way.
+int compareSongsNewestFirst(Song a, Song b) {
+  final byCreatedAt = b.createdAt.compareTo(a.createdAt);
+  if (byCreatedAt != 0) return byCreatedAt;
+  return (b.id ?? 0).compareTo(a.id ?? 0);
+}
+
 /// A single song entry.
 ///
 /// Mirrors the existing `songs` table from the legacy (FlutterFlow) Android

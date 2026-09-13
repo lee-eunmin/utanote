@@ -60,7 +60,10 @@ class _FolderDetailScreenState extends State<FolderDetailScreen> {
         : await widget.storage.folders.getSongIds(folderId);
     final idSet = ids.toSet();
     final all = await widget.storage.songs.getAll();
-    final songs = all.where((s) => idSet.contains(s.id)).toList();
+    final songs = all.where((s) => idSet.contains(s.id)).toList()
+      // Folder song order is unaffected by the main list's newest-first
+      // default (see SongRepository.getAll) and stays title-sorted.
+      ..sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
     if (!mounted) return;
     setState(() {
       _allInFolder = songs;

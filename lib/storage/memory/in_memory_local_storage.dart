@@ -41,7 +41,10 @@ class _InMemorySongRepository implements SongRepository {
   _InMemorySongRepository(this._store);
 
   @override
-  Future<List<Song>> getAll() async => List.unmodifiable(_store.songs);
+  Future<List<Song>> getAll() async {
+    final songs = List.of(_store.songs)..sort(compareSongsNewestFirst);
+    return List.unmodifiable(songs);
+  }
 
   @override
   Future<Song?> getById(int id) async {
@@ -77,7 +80,8 @@ class _InMemorySongRepository implements SongRepository {
   @override
   Future<List<Song>> search(String query) async {
     final needle = query.toLowerCase();
-    return _store.songs.where((song) {
+    final songs = await getAll();
+    return songs.where((song) {
       if (song.songNumber.toLowerCase().contains(needle)) return true;
       if (song.title.toLowerCase().contains(needle)) return true;
       if ((song.artist ?? '').toLowerCase().contains(needle)) return true;

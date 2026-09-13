@@ -183,11 +183,19 @@ class _SqliteSongRepository implements SongRepository {
   final Database _db;
   static const _table = 'songs';
 
+  /// Default "newest first" ordering — see [compareSongsNewestFirst] in
+  /// `models/song.dart`, which the Web and in-memory storages use for the
+  /// same effect. `created_at` is stored as an ISO-8601 string produced by
+  /// `DateTime.toIso8601String()`, which sorts lexicographically in the same
+  /// order as chronologically, so a plain SQL `ORDER BY` works here without
+  /// needing to parse dates.
+  static const _newestFirstOrderBy = 'created_at DESC, id DESC';
+
   _SqliteSongRepository(this._db);
 
   @override
   Future<List<Song>> getAll() async {
-    final rows = await _db.query(_table, orderBy: 'title COLLATE NOCASE');
+    final rows = await _db.query(_table, orderBy: _newestFirstOrderBy);
     return rows.map(Song.fromDbMap).toList();
   }
 
@@ -300,7 +308,7 @@ class _SqliteSongRepository implements SongRepository {
       where:
           'song_number LIKE ? OR title LIKE ? OR artist LIKE ? OR search_aliases LIKE ?',
       whereArgs: [needle, needle, needle, needle],
-      orderBy: 'title COLLATE NOCASE',
+      orderBy: _newestFirstOrderBy,
     );
     return rows.map(Song.fromDbMap).toList();
   }

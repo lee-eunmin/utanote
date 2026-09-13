@@ -122,9 +122,7 @@ class _WebSongRepository implements SongRepository {
   @override
   Future<List<Song>> getAll() async {
     final songs = _readAll();
-    songs.sort(
-      (a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()),
-    );
+    songs.sort(compareSongsNewestFirst);
     return songs;
   }
 
