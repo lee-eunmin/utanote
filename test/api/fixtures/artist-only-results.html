@@ -1,0 +1,40 @@
+<!-- Simulates a strType=2 (artist-only) TJ response. Song 22222 overlaps with
+     title-only-results.html to exercise cross-category de-dup by songNumber;
+     song 33333 is new (matched only via artist here). -->
+<html>
+<body>
+<div class="music-search-list type2">
+  <h2>가수</h2>
+  <ul class="chart-list-area music type-a type-b">
+    <li>
+      <ul class="grid-container list ico">
+        <li class="grid-item center pos-type"><p class="count"><span class="mo-title">곡번호</span><span class="num2">22222</span></p></li>
+        <li class="grid-item title3">
+          <div class="flex-box ico-flex">
+            <ul><li><p class="no-ico"></p></li></ul>
+            <p class=""><span>Another Title</span></p>
+          </div>
+        </li>
+        <li class="grid-item title4 singer"><p><span>Artist B</span></p></li>
+        <li class="grid-item title5"><p><span class="">Lyricist B</span></p></li>
+        <li class="grid-item title6"><p><span class="">Composer B</span></p></li>
+      </ul>
+    </li>
+    <li>
+      <ul class="grid-container list ico">
+        <li class="grid-item center pos-type"><p class="count"><span class="mo-title">곡번호</span><span class="num2">33333</span></p></li>
+        <li class="grid-item title3">
+          <div class="flex-box ico-flex">
+            <ul><li><p class="no-ico"></p></li></ul>
+            <p class=""><span>Third Song</span></p>
+          </div>
+        </li>
+        <li class="grid-item title4 singer"><p><span>Matching Artist</span></p></li>
+        <li class="grid-item title5"><p><span class="">Lyricist C</span></p></li>
+        <li class="grid-item title6"><p><span class="">Composer C</span></p></li>
+      </ul>
+    </li>
+  </ul>
+</div>
+</body>
+</html>

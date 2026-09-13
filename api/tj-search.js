@@ -37,14 +37,22 @@ function setCorsHeaders(res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 }
 
-/// Parses a TJ Media accompaniment_search results page into normalized
-/// {songNumber, title, artist} rows, deduplicated by songNumber.
+// TJ category codes for strType. These are NOT a combinable bitmask despite
+// the power-of-two values (verified against the live endpoint: strType=3
+// returns no result section at all) — each search hits exactly one category.
+const TJ_STR_TYPE = {
+  TITLE: '1',
+  ARTIST: '2',
+  SONG_NUMBER: '16',
+};
+
+/// Parses a single-category TJ Media accompaniment_search results page into
+/// normalized {songNumber, title, artist} rows, deduplicated by songNumber.
 ///
-/// TJ renders one "grid-container list" per matched row, repeated across
-/// several category sections (title/singer/lyricist/composer/song
-/// number/medley) on an integrated (strType=0) search. We read every such
-/// row across the whole page rather than a single section, since the task
-/// asks to search across everything TJ returns for the query in one request.
+/// TJ renders one "grid-container list" per matched row. We read every such
+/// row on the page; callers are expected to request a single category
+/// (title/artist/song number) via strType so that lyricist/composer/medley
+/// matches never appear here.
 function parseResults(html) {
   const $ = cheerio.load(html);
   const results = [];
@@ -64,14 +72,14 @@ function parseResults(html) {
   return results;
 }
 
-async function fetchTjHtml(query) {
+async function fetchTjHtml(query, strType) {
   const params = new URLSearchParams({
     pageNo: '1',
     pageRowCnt: '15',
     strSotrGubun: 'ASC',
     strSortType: '',
     nationType: '',
-    strType: '0', // 통합검색 (integrated): matches title/singer/lyricist/composer/song number/medley in one request.
+    strType,
     searchTxt: query,
   });
 
@@ -95,6 +103,42 @@ async function fetchTjHtml(query) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function searchByCategory(query, strType) {
+  const html = await fetchTjHtml(query, strType);
+  try {
+    return parseResults(html);
+  } catch (err) {
+    err.isParseError = true;
+    throw err;
+  }
+}
+
+/// Searches only the categories relevant to our app (title, artist, song
+/// number) so TJ's lyricist/composer/medley-only matches — which our API
+/// doesn't expose and would otherwise look like irrelevant noise — never
+/// appear in the response. Merged and deduplicated by songNumber.
+async function searchRelevant(query) {
+  const isNumeric = /^\d+$/.test(query);
+
+  if (isNumeric) {
+    return searchByCategory(query, TJ_STR_TYPE.SONG_NUMBER);
+  }
+
+  const [titleResults, artistResults] = await Promise.all([
+    searchByCategory(query, TJ_STR_TYPE.TITLE),
+    searchByCategory(query, TJ_STR_TYPE.ARTIST),
+  ]);
+
+  const merged = [];
+  const seen = new Set();
+  for (const result of [...titleResults, ...artistResults]) {
+    if (seen.has(result.songNumber)) continue;
+    seen.add(result.songNumber);
+    merged.push(result);
+  }
+  return merged;
 }
 
 module.exports = async (req, res) => {
@@ -129,19 +173,15 @@ module.exports = async (req, res) => {
     return;
   }
 
-  let html;
-  try {
-    html = await fetchTjHtml(tjQuery);
-  } catch (err) {
-    res.status(502).json({ error: 'Unable to reach TJ Media search' });
-    return;
-  }
-
   let results;
   try {
-    results = parseResults(html);
+    results = await searchRelevant(tjQuery);
   } catch (err) {
-    res.status(500).json({ error: 'Unable to parse TJ Media search results' });
+    if (err.isParseError) {
+      res.status(500).json({ error: 'Unable to parse TJ Media search results' });
+    } else {
+      res.status(502).json({ error: 'Unable to reach TJ Media search' });
+    }
     return;
   }
 
@@ -153,3 +193,5 @@ module.exports = async (req, res) => {
 // Exposed for fixture-based unit testing (see test/api/tj-search.test.js).
 // Vercel only uses the default export above as the request handler.
 module.exports.parseResults = parseResults;
+module.exports.searchRelevant = searchRelevant;
+module.exports.TJ_STR_TYPE = TJ_STR_TYPE;
