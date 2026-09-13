@@ -42,6 +42,9 @@ dependencies:
   # Web local storage: browser localStorage, used as a simple JSON store.
   shared_preferences: ^2.3.5
 
+  # HTTP client for the TJ Media search API (server-side proxy in /api).
+  http: ^1.2.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

@@ -1,0 +1,11 @@
+{
+  "name": "utanote-api",
+  "private": true,
+  "description": "Vercel serverless functions backing the UtaNote Flutter app (TJ Media search proxy). The Flutter app itself is built/tested separately via the Flutter SDK.",
+  "scripts": {
+    "test": "node --test test/api/*.test.js"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0"
+  }
+}
