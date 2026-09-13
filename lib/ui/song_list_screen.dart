@@ -1,14 +1,29 @@
 import 'package:flutter/material.dart';
 
 import '../models/song.dart';
+import '../models/song_options.dart';
 import '../storage/local_storage.dart';
+import 'song_bulk_actions.dart';
+import 'song_edit_sheet.dart';
+import 'widgets/animated_song_list.dart';
+import 'widgets/app_header.dart';
+import 'widgets/filter_chip_bar.dart';
+import 'widgets/pickers.dart';
+import 'widgets/responsive_center.dart';
+import 'widgets/selection_action_bar.dart';
+import 'widgets/song_card.dart';
 
-/// Temporary, unstyled screen for this stage only.
-///
-/// It exists purely to prove the storage layer works end-to-end: creating
-/// songs, persisting them across reload/restart, saving search aliases, and
-/// searching by them (including song_number/title/artist). It intentionally
-/// never shows the legacy `memo` field. Real visual design comes later.
+const _filterAll = '전체';
+const _filterFavorite = '즐겨찾기';
+const _filterOptions = [
+  _filterAll,
+  _filterFavorite,
+  ...kPracticeStatusFilterOrder,
+];
+
+/// The main "노래 목록" tab: search, filter chips, and the animated list of
+/// songs. Never reads or exposes [Song.memo]; search matches
+/// song_number/title/artist/searchAliases via [SongRepository.search].
 class SongListScreen extends StatefulWidget {
   final LocalStorage storage;
 
@@ -19,14 +34,16 @@ class SongListScreen extends StatefulWidget {
 }
 
 class _SongListScreenState extends State<SongListScreen> {
-  final _songNumberController = TextEditingController();
-  final _titleController = TextEditingController();
-  final _artistController = TextEditingController();
-  final _aliasesController = TextEditingController();
   final _searchController = TextEditingController();
 
-  List<Song> _songs = [];
+  List<Song> _allMatching = [];
+  List<Song> _displayed = [];
+  String _filter = _filterAll;
   bool _loading = true;
+  int _totalCount = 0;
+  final Set<int> _selected = {};
+
+  bool get _selectionMode => _selected.isNotEmpty;
 
   @override
   void initState() {
@@ -36,149 +53,195 @@ class _SongListScreenState extends State<SongListScreen> {
 
   @override
   void dispose() {
-    _songNumberController.dispose();
-    _titleController.dispose();
-    _artistController.dispose();
-    _aliasesController.dispose();
     _searchController.dispose();
     super.dispose();
   }
 
   Future<void> _reload() async {
-    setState(() => _loading = true);
     final query = _searchController.text.trim();
-    final songs = query.isEmpty
-        ? await widget.storage.songs.getAll()
-        : await widget.storage.songs.search(query);
+    final all = await widget.storage.songs.getAll();
+    final base = query.isEmpty ? all : await widget.storage.songs.search(query);
+    if (!mounted) return;
     setState(() {
-      _songs = songs;
+      _allMatching = base;
+      _displayed = _applyFilter(base);
+      _totalCount = all.length;
       _loading = false;
     });
   }
 
-  List<String> _parseAliases(String raw) {
-    return raw
-        .split(',')
-        .map((s) => s.trim())
-        .where((s) => s.isNotEmpty)
-        .toList();
+  List<Song> _applyFilter(List<Song> songs) {
+    switch (_filter) {
+      case _filterFavorite:
+        return songs.where((s) => s.favorite).toList();
+      case _filterAll:
+        return songs;
+      default:
+        return songs.where((s) => s.practiceStatus == _filter).toList();
+    }
   }
 
-  Future<void> _addSong() async {
-    final songNumber = _songNumberController.text.trim();
-    final title = _titleController.text.trim();
-    if (songNumber.isEmpty || title.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Song number and title are required.')),
-      );
-      return;
-    }
-    final now = DateTime.now();
-    final song = Song(
-      karaokeType: 'TJ',
-      songNumber: songNumber,
-      title: title,
-      artist: _artistController.text.trim().isEmpty
-          ? null
-          : _artistController.text.trim(),
-      searchAliases: _parseAliases(_aliasesController.text),
-      createdAt: now,
-      updatedAt: now,
+  void _onFilterChanged(String filter) {
+    setState(() {
+      _filter = filter;
+      _displayed = _applyFilter(_allMatching);
+    });
+  }
+
+  Future<void> _toggleFavorite(Song song) async {
+    await widget.storage.songs.update(
+      song.copyWith(favorite: !song.favorite, updatedAt: DateTime.now()),
     );
-    await widget.storage.songs.create(song);
-    _songNumberController.clear();
-    _titleController.clear();
-    _artistController.clear();
-    _aliasesController.clear();
+    await _reload();
+  }
+
+  void _toggleSelected(Song song) {
+    final id = song.id;
+    if (id == null) return;
+    setState(() {
+      if (_selected.contains(id)) {
+        _selected.remove(id);
+      } else {
+        _selected.add(id);
+      }
+    });
+  }
+
+  void _clearSelection() => setState(_selected.clear);
+
+  Future<void> _openEditor({Song? existing}) async {
+    await showSongEditSheet(
+      context: context,
+      storage: widget.storage,
+      existing: existing,
+    );
+    await _reload();
+  }
+
+  Future<void> _bulkAddToFolder() async {
+    final folders = await widget.storage.folders.getAll();
+    if (!mounted) return;
+    final folderId = await pickFolderDialog(context, folders);
+    if (folderId == null) return;
+    await addSongsToFolder(widget.storage, _selected, folderId);
+    _clearSelection();
+    if (mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('폴더에 추가했습니다.')));
+    }
+  }
+
+  Future<void> _bulkChangeStatus() async {
+    final status = await pickStatusDialog(context);
+    if (status == null) return;
+    await setPracticeStatusForSongs(
+      widget.storage,
+      _allMatching,
+      _selected,
+      status,
+    );
+    _clearSelection();
+    await _reload();
+  }
+
+  Future<void> _bulkDelete() async {
+    final confirmed = await confirmDialog(
+      context,
+      title: '노래 삭제',
+      message: '선택한 ${_selected.length}곡을 삭제할까요?',
+    );
+    if (!confirmed) return;
+    await deleteSongs(widget.storage, _selected);
+    _clearSelection();
     await _reload();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('UtaNote (temporary test screen)')),
-      body: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text('Add song', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            Row(
+      body: SafeArea(
+        bottom: false,
+        child: ResponsiveCenter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+            child: Column(
               children: [
-                Expanded(
-                  child: TextField(
-                    controller: _songNumberController,
-                    decoration: const InputDecoration(
-                      labelText: 'Song number *',
-                    ),
+                AppHeader(
+                  subtitle: '$_totalCount곡',
+                  trailing: HeaderIconButton(
+                    key: const Key('addSongButton'),
+                    icon: Icons.add_rounded,
+                    onPressed: () => _openEditor(),
                   ),
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  flex: 2,
-                  child: TextField(
-                    controller: _titleController,
-                    decoration: const InputDecoration(labelText: 'Title *'),
+                TextField(
+                  key: const Key('songSearchField'),
+                  controller: _searchController,
+                  decoration: const InputDecoration(
+                    hintText: '노래 · 가수 · 번호 검색',
+                    prefixIcon: Icon(Icons.search_rounded, size: 20),
                   ),
+                  onChanged: (_) => _reload(),
+                ),
+                const SizedBox(height: 14),
+                FilterChipBar(
+                  options: _filterOptions,
+                  selected: _filter,
+                  onSelected: _onFilterChanged,
+                ),
+                const SizedBox(height: 4),
+                Expanded(
+                  child: _loading
+                      ? const Center(child: CircularProgressIndicator())
+                      : AnimatedSongList(
+                          songs: _displayed,
+                          empty: const Center(child: Text('노래가 없습니다.')),
+                          itemBuilder: (context, song) {
+                            final selected =
+                                song.id != null && _selected.contains(song.id);
+                            return SongCard(
+                              song: song,
+                              selectionMode: _selectionMode,
+                              selected: selected,
+                              onTap: () {
+                                if (_selectionMode) {
+                                  _toggleSelected(song);
+                                } else {
+                                  _openEditor(existing: song);
+                                }
+                              },
+                              onLongPress: () => _toggleSelected(song),
+                              onFavoriteToggle: (_) => _toggleFavorite(song),
+                            );
+                          },
+                        ),
+                ),
+                SelectionActionBar(
+                  visible: _selectionMode,
+                  count: _selected.length,
+                  onClose: _clearSelection,
+                  actions: [
+                    SelectionAction(
+                      icon: Icons.create_new_folder_rounded,
+                      label: '폴더에 추가',
+                      onTap: _bulkAddToFolder,
+                    ),
+                    SelectionAction(
+                      icon: Icons.flag_rounded,
+                      label: '상태 변경',
+                      onTap: _bulkChangeStatus,
+                    ),
+                    SelectionAction(
+                      icon: Icons.delete_rounded,
+                      label: '삭제',
+                      destructive: true,
+                      onTap: _bulkDelete,
+                    ),
+                  ],
                 ),
               ],
             ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _artistController,
-              decoration: const InputDecoration(labelText: 'Artist'),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _aliasesController,
-              decoration: const InputDecoration(
-                labelText: 'Search aliases (comma-separated)',
-                hintText: 'e.g. 밤을 달리다, 요루니카케루',
-              ),
-            ),
-            const SizedBox(height: 8),
-            ElevatedButton(
-              onPressed: _addSong,
-              child: const Text('Add song'),
-            ),
-            const Divider(height: 32),
-            TextField(
-              controller: _searchController,
-              decoration: const InputDecoration(
-                labelText: 'Search (song number / title / artist / alias)',
-                suffixIcon: Icon(Icons.search),
-              ),
-              onChanged: (_) => _reload(),
-            ),
-            const SizedBox(height: 8),
-            if (_loading)
-              const Padding(
-                padding: EdgeInsets.all(16),
-                child: Center(child: CircularProgressIndicator()),
-              )
-            else
-              Expanded(
-                child: _songs.isEmpty
-                    ? const Center(child: Text('No songs yet.'))
-                    : ListView.builder(
-                        itemCount: _songs.length,
-                        itemBuilder: (context, index) {
-                          final song = _songs[index];
-                          final subtitleParts = [
-                            song.songNumber,
-                            if (song.artist != null) song.artist!,
-                            if (song.searchAliases.isNotEmpty)
-                              'aliases: ${song.searchAliases.join(", ")}',
-                          ];
-                          return ListTile(
-                            title: Text(song.title),
-                            subtitle: Text(subtitleParts.join(' · ')),
-                          );
-                        },
-                      ),
-              ),
-          ],
+          ),
         ),
       ),
     );

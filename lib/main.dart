@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 
 import 'storage/local_storage.dart';
 import 'storage/local_storage_factory.dart';
-import 'ui/song_list_screen.dart';
+import 'theme/app_theme.dart';
+import 'ui/app_shell.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -20,8 +21,9 @@ class UtaNoteApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'UtaNote',
-      theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple)),
-      home: SongListScreen(storage: storage),
+      debugShowCheckedModeBanner: false,
+      theme: buildAppTheme(),
+      home: AppShell(storage: storage),
     );
   }
 }
