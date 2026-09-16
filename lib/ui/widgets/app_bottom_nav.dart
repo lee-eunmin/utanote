@@ -1,16 +1,28 @@
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../../theme/app_theme.dart';
+import 'pwa_standalone.dart';
 
 /// Extra bottom padding reserved on web, on top of whatever safe-area inset
-/// MediaQuery reports. iOS Safari/PWA standalone mode doesn't always surface
-/// a large-enough `safe-area-inset-bottom` through Flutter web's MediaQuery
-/// (sometimes 0 even with `viewport-fit=cover`), which leaves the tab bar's
-/// touch targets sitting under the home-indicator gesture strip. This is a
-/// flat floor added unconditionally so taps register reliably even when the
-/// reported inset can't be trusted.
+/// MediaQuery reports, for ordinary mobile browser tabs (Safari, in-app
+/// browsers like KakaoTalk). Those report a real, usable
+/// `safe-area-inset-bottom`, so this is just a small cosmetic floor.
 const _webMinBottomPadding = 12.0;
+
+/// Minimum bottom padding *guaranteed* (not just added) when running as an
+/// installed iOS PWA (`isPwaStandalone()`). In that mode iOS's
+/// `env(safe-area-inset-bottom)` — and so Flutter web's
+/// `MediaQuery.padding.bottom` — can report 0, even though the OS still
+/// reserves a real home-indicator gesture strip at the bottom of the screen
+/// that silently swallows touches. If the tab bar's hit area is placed in
+/// that strip, taps are eaten by the OS before they ever reach Flutter —
+/// they don't just look wrong, they stop registering entirely. 34px matches
+/// the actual home-indicator height Apple uses on notched iPhones, so this
+/// floor is enough even when the reported inset can't be trusted.
+const _iosPwaStandaloneMinBottomPadding = 34.0;
 
 class _NavDestination {
   final IconData icon;
@@ -44,8 +56,17 @@ class AppBottomNav extends StatelessWidget {
     // On web, pad the bar ourselves (safe-area inset + a guaranteed floor)
     // and tell SafeArea to leave the bottom alone so the two don't stack.
     // Native (Android) keeps the original SafeArea-only behavior untouched.
-    final webBottomPadding =
+    //
+    // In iOS PWA standalone mode the reported inset can't be trusted (see
+    // `_iosPwaStandaloneMinBottomPadding`), so there the floor is applied as
+    // a guaranteed minimum on the *total* padding rather than just added on
+    // top — otherwise a 0 inset would still leave only the small cosmetic
+    // web floor, which sits inside the home-indicator's swallow zone.
+    final reportedBottomPadding =
         MediaQuery.of(context).padding.bottom + _webMinBottomPadding;
+    final webBottomPadding = kIsWeb && isPwaStandalone()
+        ? math.max(reportedBottomPadding, _iosPwaStandaloneMinBottomPadding)
+        : reportedBottomPadding;
 
     return Container(
       decoration: const BoxDecoration(
