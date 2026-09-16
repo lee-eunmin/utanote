@@ -1,6 +1,16 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../../theme/app_theme.dart';
+
+/// Extra bottom padding reserved on web, on top of whatever safe-area inset
+/// MediaQuery reports. iOS Safari/PWA standalone mode doesn't always surface
+/// a large-enough `safe-area-inset-bottom` through Flutter web's MediaQuery
+/// (sometimes 0 even with `viewport-fit=cover`), which leaves the tab bar's
+/// touch targets sitting under the home-indicator gesture strip. This is a
+/// flat floor added unconditionally so taps register reliably even when the
+/// reported inset can't be trusted.
+const _webMinBottomPadding = 12.0;
 
 class _NavDestination {
   final IconData icon;
@@ -31,92 +41,104 @@ class AppBottomNav extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // On web, pad the bar ourselves (safe-area inset + a guaranteed floor)
+    // and tell SafeArea to leave the bottom alone so the two don't stack.
+    // Native (Android) keeps the original SafeArea-only behavior untouched.
+    final webBottomPadding =
+        MediaQuery.of(context).padding.bottom + _webMinBottomPadding;
+
     return Container(
       decoration: const BoxDecoration(
         color: AppColors.bg,
         border: Border(top: BorderSide(color: AppColors.hairline)),
       ),
-      child: SafeArea(
-        top: false,
-        // Fix the height *before* Align: Scaffold gives the
-        // bottomNavigationBar slot a bounded-but-loose height, and an Align
-        // (unlike a Center with a tightly-sized child) expands to fill any
-        // bounded height it's given rather than shrink-wrapping its child —
-        // without this SizedBox the whole bar (and its tap targets) would
-        // stretch to fill the screen instead of staying a compact strip.
-        child: SizedBox(
-          height: 58,
-          child: Align(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 640),
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final itemWidth = constraints.maxWidth / _destinations.length;
-                  return Stack(
-                    children: [
-                      AnimatedPositioned(
-                        duration: const Duration(milliseconds: 220),
-                        curve: Curves.easeOutCubic,
-                        left: itemWidth * currentIndex,
-                        top: 0,
-                        width: itemWidth,
-                        height: 2.5,
-                        child: Center(
-                          child: Container(
-                            width: 22,
-                            height: 2.5,
-                            decoration: BoxDecoration(
-                              color: AppColors.accent,
-                              borderRadius: BorderRadius.circular(2),
+      child: Padding(
+        padding: EdgeInsets.only(bottom: kIsWeb ? webBottomPadding : 0),
+        child: SafeArea(
+          top: false,
+          bottom: !kIsWeb,
+          // Fix the height *before* Align: Scaffold gives the
+          // bottomNavigationBar slot a bounded-but-loose height, and an
+          // Align (unlike a Center with a tightly-sized child) expands to
+          // fill any bounded height it's given rather than shrink-wrapping
+          // its child — without this SizedBox the whole bar (and its tap
+          // targets) would stretch to fill the screen instead of staying a
+          // compact strip.
+          child: SizedBox(
+            height: 58,
+            child: Align(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 640),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final itemWidth =
+                        constraints.maxWidth / _destinations.length;
+                    return Stack(
+                      children: [
+                        AnimatedPositioned(
+                          duration: const Duration(milliseconds: 220),
+                          curve: Curves.easeOutCubic,
+                          left: itemWidth * currentIndex,
+                          top: 0,
+                          width: itemWidth,
+                          height: 2.5,
+                          child: Center(
+                            child: Container(
+                              width: 22,
+                              height: 2.5,
+                              decoration: BoxDecoration(
+                                color: AppColors.accent,
+                                borderRadius: BorderRadius.circular(2),
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                      Row(
-                        children: List.generate(_destinations.length, (i) {
-                          final destination = _destinations[i];
-                          final selected = i == currentIndex;
-                          final color = selected
-                              ? AppColors.textPrimary
-                              : AppColors.textTertiary;
-                          return Expanded(
-                            child: InkWell(
-                              key: Key('navTab$i'),
-                              onTap: () => onTap(i),
-                              child: Padding(
-                                padding: const EdgeInsets.only(top: 10),
-                                child: Column(
-                                  mainAxisAlignment: MainAxisAlignment.start,
-                                  children: [
-                                    Icon(
-                                      destination.icon,
-                                      color: color,
-                                      size: 21,
-                                    ),
-                                    const SizedBox(height: 4),
-                                    AnimatedDefaultTextStyle(
-                                      duration: const Duration(
-                                        milliseconds: 200,
-                                      ),
-                                      style: TextStyle(
-                                        fontSize: 10.5,
+                        Row(
+                          children: List.generate(_destinations.length, (i) {
+                            final destination = _destinations[i];
+                            final selected = i == currentIndex;
+                            final color = selected
+                                ? AppColors.textPrimary
+                                : AppColors.textTertiary;
+                            return Expanded(
+                              child: InkWell(
+                                key: Key('navTab$i'),
+                                onTap: () => onTap(i),
+                                child: Padding(
+                                  padding: const EdgeInsets.only(top: 10),
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.start,
+                                    children: [
+                                      Icon(
+                                        destination.icon,
                                         color: color,
-                                        fontWeight: selected
-                                            ? FontWeight.w700
-                                            : FontWeight.w500,
+                                        size: 21,
                                       ),
-                                      child: Text(destination.label),
-                                    ),
-                                  ],
+                                      const SizedBox(height: 4),
+                                      AnimatedDefaultTextStyle(
+                                        duration: const Duration(
+                                          milliseconds: 200,
+                                        ),
+                                        style: TextStyle(
+                                          fontSize: 10.5,
+                                          color: color,
+                                          fontWeight: selected
+                                              ? FontWeight.w700
+                                              : FontWeight.w500,
+                                        ),
+                                        child: Text(destination.label),
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ),
-                            ),
-                          );
-                        }),
-                      ),
-                    ],
-                  );
-                },
+                            );
+                          }),
+                        ),
+                      ],
+                    );
+                  },
+                ),
               ),
             ),
           ),
