@@ -86,11 +86,21 @@ class SqliteLocalStorage implements LocalStorage {
     return repo;
   }
 
+  /// IMPORTANT: sqflite calls [_onCreate] — not [_onUpgrade] — whenever the
+  /// on-disk `PRAGMA user_version` is `0`, regardless of whether the file
+  /// already contains tables. The legacy (pre-rewrite) app's `songbook.db`
+  /// was never versioned via sqflite's `version:` parameter, so its
+  /// `user_version` is `0` even though it already has real `songs` /
+  /// `folders` / `folder_songs` data. That means this method runs for
+  /// upgrading users too, not just fresh installs — every statement here
+  /// must be safe to run against an existing, populated database:
+  /// `CREATE TABLE IF NOT EXISTS` (never a plain `CREATE TABLE`, which
+  /// throws "table already exists" against a legacy database), and new
+  /// columns added via the same existence-checked helper [_onUpgrade] uses,
+  /// never assumed present from the `CREATE TABLE` alone.
   static Future<void> _onCreate(Database db, int version) async {
-    // Fresh installs only. Existing installs go through _onUpgrade instead,
-    // so this schema is safe to keep in sync with the latest columns.
     await db.execute('''
-      CREATE TABLE songs (
+      CREATE TABLE IF NOT EXISTS songs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         karaoke_type TEXT NOT NULL,
         song_number TEXT NOT NULL,
@@ -101,14 +111,13 @@ class SqliteLocalStorage implements LocalStorage {
         difficulty TEXT,
         practice_status TEXT,
         memo TEXT,
-        search_aliases TEXT,
         favorite INTEGER DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       )
     ''');
     await db.execute('''
-      CREATE TABLE folders (
+      CREATE TABLE IF NOT EXISTS folders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         created_at TEXT NOT NULL,
@@ -116,13 +125,14 @@ class SqliteLocalStorage implements LocalStorage {
       )
     ''');
     await db.execute('''
-      CREATE TABLE folder_songs (
+      CREATE TABLE IF NOT EXISTS folder_songs (
         folder_id INTEGER NOT NULL,
         song_id INTEGER NOT NULL,
         added_at TEXT NOT NULL,
         PRIMARY KEY (folder_id, song_id)
       )
     ''');
+    await _ensureSearchAliasesColumn(db);
   }
 
   /// Upgrades an existing database in place. This must only ever ADD
