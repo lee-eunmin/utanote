@@ -19,6 +19,13 @@
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
 
+  <!--
+    viewport-fit=cover lets the iOS PWA draw under the status bar / home
+    indicator, which is required for env(safe-area-inset-*) (and thus
+    Flutter's MediaQuery.padding on web) to report non-zero insets there.
+  -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+
   <meta
     name="description"
     content="노래방 곡 번호와 곡 정보를 저장하고 관리하는 우타노트"
@@ -29,7 +36,12 @@
   <!-- iOS / PWA -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <!--
+    black-translucent lets app content extend under the status bar instead
+    of the OS drawing an opaque bar there, so it blends with the app's dark
+    background instead of showing a plain (white/default) bar.
+  -->
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="UTANOTE">
 
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
@@ -40,6 +52,13 @@
   <title>UTANOTE</title>
 
   <link rel="manifest" href="manifest.json">
+
+  <style>
+    /* Match the app's dark background so the status-bar/notch and home-
+       indicator safe-area strips (and any pre-paint flash) show dark
+       instead of the browser's default white. */
+    html, body { background: #080809; margin: 0; }
+  </style>
 </head>
 
 <body>
