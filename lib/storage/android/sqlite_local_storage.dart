@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:io';
 
-import 'package:flutter/foundation.dart' show kDebugMode, debugPrint;
+import 'package:flutter/foundation.dart'
+    show kDebugMode, debugPrint, visibleForTesting;
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
@@ -9,6 +11,9 @@ import '../../models/song.dart';
 import '../folder_repository.dart';
 import '../local_storage.dart';
 import '../song_repository.dart';
+import '../sync_id.dart';
+import 'sqlite_pre_migration_backup.dart';
+import 'sqlite_schema.dart';
 
 /// Bound on how long a single write's plugin round-trip is allowed to hang
 /// before we treat it as suspect. This is a *safety net*, not the primary
@@ -37,11 +42,6 @@ void _diagLog(String message) {
 /// of migrating it. See CLAUDE.md.
 const String _databaseFileName = 'songbook.db';
 
-/// Bumped from the legacy app's schema (which did not have
-/// `search_aliases`). See [_onUpgrade] / [_ensureSearchAliasesColumn] for
-/// the additive-only migration.
-const int _databaseVersion = 2;
-
 LocalStorage createLocalStorage() => SqliteLocalStorage();
 
 class SqliteLocalStorage implements LocalStorage {
@@ -49,23 +49,112 @@ class SqliteLocalStorage implements LocalStorage {
   SongRepository? _songs;
   FolderRepository? _folders;
 
+  /// Outcome of the one-time pre-migration backup attempted by [init].
+  PreMigrationBackupResult? lastBackupResult;
+
   @override
   Future<void> init() async {
     if (_db != null) return;
     final dbDir = await getDatabasesPath();
     final path = p.join(dbDir, _databaseFileName);
+
+    // Must run before openDatabase: once opened at the new version, the
+    // migration has already modified the file. Never throws; a failed
+    // backup leaves the original untouched and startup continues (the
+    // migration itself is additive-only and transactional).
+    final backup = await backupBeforeMigrationIfNeeded(
+      databasePath: path,
+      targetVersion: kSongbookDatabaseVersion,
+    );
+    lastBackupResult = backup;
+
     _db = await openDatabase(
       path,
-      version: _databaseVersion,
-      onCreate: _onCreate,
-      onUpgrade: _onUpgrade,
+      version: kSongbookDatabaseVersion,
+      // IMPORTANT: sqflite calls onCreate — not onUpgrade — whenever the
+      // on-disk `user_version` is 0, regardless of whether the file already
+      // has tables. The legacy app's songbook.db is exactly that (populated
+      // tables, user_version 0), so onCreate runs for upgrading users too.
+      // ensureSchema is idempotent and non-destructive for that reason.
+      onCreate: (db, version) => ensureSchema(db),
+      onUpgrade: (db, oldVersion, newVersion) => ensureSchema(db),
       onOpen: (db) async {
-        await _ensureSearchAliasesColumn(db);
-        await _cleanupOrphanedFolderSongs(db);
+        // Re-checked on every open rather than trusting user_version alone.
+        await db.transaction((txn) => ensureSchema(txn));
+        await _recordBackupResult(db, backup);
+        await runLegacyOrphanCleanupOnce(db);
       },
     );
     _songs = _SqliteSongRepository(_db!);
     _folders = _SqliteFolderRepository(_db!);
+  }
+
+  /// Raw connection, for tests that assert on the on-disk schema/rows.
+  @visibleForTesting
+  Database get databaseForTesting => _db!;
+
+  /// Closes the connection. The app never needs this (it keeps one
+  /// connection for its lifetime); tests use it to simulate a restart.
+  Future<void> close() async {
+    await _db?.close();
+    _db = null;
+    _songs = null;
+    _folders = null;
+  }
+
+  static Future<void> _recordBackupResult(
+    Database db,
+    PreMigrationBackupResult backup,
+  ) async {
+    switch (backup.status) {
+      case PreMigrationBackupStatus.created:
+        await _recordBackupFileMeta(db, backup.backupPath!, nowUtcMs());
+      case PreMigrationBackupStatus.alreadyExists:
+        // Covers a backup made on an earlier launch whose metadata never
+        // got written (app killed between the backup and onOpen). The time
+        // is recovered from the file's modification time, which is set
+        // when the backup is written and never touched afterwards.
+        final file = File(backup.backupPath!);
+        if (await file.exists()) {
+          final modified = await file.lastModified();
+          await _recordBackupFileMeta(
+            db,
+            backup.backupPath!,
+            modified.toUtc().millisecondsSinceEpoch,
+          );
+        }
+      case PreMigrationBackupStatus.failed:
+        final message = backup.error.toString();
+        await writeSyncMeta(
+          db,
+          SyncMetaKeys.preSyncBackupError,
+          message.length > 500 ? message.substring(0, 500) : message,
+        );
+      case PreMigrationBackupStatus.notNeededFreshInstall:
+      case PreMigrationBackupStatus.notNeededAlreadyMigrated:
+        break;
+    }
+  }
+
+  /// Writes the backup's file name and creation time to `sync_meta`, but
+  /// only for keys that are missing or empty — a value already recorded is
+  /// never overwritten. Reads the backup file's metadata only; never
+  /// rewrites the file itself.
+  static Future<void> _recordBackupFileMeta(
+    Database db,
+    String backupPath,
+    int createdAtMs,
+  ) async {
+    await writeSyncMetaIfMissing(
+      db,
+      SyncMetaKeys.preSyncBackupFile,
+      p.basename(backupPath),
+    );
+    await writeSyncMetaIfMissing(
+      db,
+      SyncMetaKeys.preSyncBackupCreatedAtMs,
+      createdAtMs.toString(),
+    );
   }
 
   @override
@@ -85,108 +174,20 @@ class SqliteLocalStorage implements LocalStorage {
     }
     return repo;
   }
+}
 
-  /// IMPORTANT: sqflite calls [_onCreate] — not [_onUpgrade] — whenever the
-  /// on-disk `PRAGMA user_version` is `0`, regardless of whether the file
-  /// already contains tables. The legacy (pre-rewrite) app's `songbook.db`
-  /// was never versioned via sqflite's `version:` parameter, so its
-  /// `user_version` is `0` even though it already has real `songs` /
-  /// `folders` / `folder_songs` data. That means this method runs for
-  /// upgrading users too, not just fresh installs — every statement here
-  /// must be safe to run against an existing, populated database:
-  /// `CREATE TABLE IF NOT EXISTS` (never a plain `CREATE TABLE`, which
-  /// throws "table already exists" against a legacy database), and new
-  /// columns added via the same existence-checked helper [_onUpgrade] uses,
-  /// never assumed present from the `CREATE TABLE` alone.
-  static Future<void> _onCreate(Database db, int version) async {
-    await db.execute('''
-      CREATE TABLE IF NOT EXISTS songs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        karaoke_type TEXT NOT NULL,
-        song_number TEXT NOT NULL,
-        title TEXT NOT NULL,
-        artist TEXT,
-        key_type TEXT,
-        key_offset INTEGER DEFAULT 0,
-        difficulty TEXT,
-        practice_status TEXT,
-        memo TEXT,
-        favorite INTEGER DEFAULT 0,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )
-    ''');
-    await db.execute('''
-      CREATE TABLE IF NOT EXISTS folders (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )
-    ''');
-    await db.execute('''
-      CREATE TABLE IF NOT EXISTS folder_songs (
-        folder_id INTEGER NOT NULL,
-        song_id INTEGER NOT NULL,
-        added_at TEXT NOT NULL,
-        PRIMARY KEY (folder_id, song_id)
-      )
-    ''');
-    await _ensureSearchAliasesColumn(db);
-  }
-
-  /// Upgrades an existing database in place. This must only ever ADD
-  /// columns/tables — never drop or rewrite existing ones — since the
-  /// database being upgraded may be the real production `songbook.db` from
-  /// the already-published app, containing real user data.
-  static Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
-    if (oldVersion < 2) {
-      await _ensureSearchAliasesColumn(db);
-    }
-    // Ensure folder tables exist even if upgrading from a legacy version
-    // that predates them, without touching `songs`.
-    await db.execute('''
-      CREATE TABLE IF NOT EXISTS folders (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )
-    ''');
-    await db.execute('''
-      CREATE TABLE IF NOT EXISTS folder_songs (
-        folder_id INTEGER NOT NULL,
-        song_id INTEGER NOT NULL,
-        added_at TEXT NOT NULL,
-        PRIMARY KEY (folder_id, song_id)
-      )
-    ''');
-  }
-
-  /// Defensive, idempotent check that runs on every open. This guards
-  /// against the legacy database's on-disk `user_version` not matching what
-  /// we expect (e.g. if the old app tracked schema versions differently),
-  /// so we never rely solely on [oldVersion] to decide whether the column
-  /// already exists.
-  static Future<void> _ensureSearchAliasesColumn(Database db) async {
-    final columns = await db.rawQuery('PRAGMA table_info(songs)');
-    final hasColumn = columns.any((c) => c['name'] == 'search_aliases');
-    if (!hasColumn) {
-      await db.execute('ALTER TABLE songs ADD COLUMN search_aliases TEXT');
-    }
-  }
-
-  /// Removes `folder_songs` rows left over from song deletions that predate
-  /// this fix (a song was deleted without also deleting its folder_songs
-  /// rows, leaving folder counts overstated). Only ever deletes rows in the
-  /// join table whose `song_id` no longer exists in `songs` — never touches
-  /// `songs` or `folders` themselves. Cheap and safe to re-run on every open.
-  static Future<void> _cleanupOrphanedFolderSongs(Database db) async {
-    await db.delete(
-      'folder_songs',
-      where: 'song_id NOT IN (SELECT id FROM songs)',
-    );
-  }
+/// Looks up a row's sync id inside [txn], or null if the row is missing or
+/// (shouldn't happen after migration) has none.
+Future<String?> _syncIdOf(DatabaseExecutor txn, String table, int id) async {
+  final rows = await txn.query(
+    table,
+    columns: ['sync_id'],
+    where: 'id = ?',
+    whereArgs: [id],
+  );
+  if (rows.isEmpty) return null;
+  final value = rows.first['sync_id'] as String?;
+  return hasSyncId(value) ? value : null;
 }
 
 class _SqliteSongRepository implements SongRepository {
@@ -218,20 +219,24 @@ class _SqliteSongRepository implements SongRepository {
 
   @override
   Future<Song> create(Song song) async {
-    final map = song.toDbMap()..remove('id');
+    final syncId = hasSyncId(song.syncId) ? song.syncId! : generateSyncId();
+    final map = song.toDbMap()
+      ..remove('id')
+      ..['sync_id'] = syncId
+      ..['sync_updated_at_ms'] = nowUtcMs();
     _diagLog('create(): calling _db.insert for "${song.title}"');
     try {
       final id = await _db.insert(_table, map).timeout(_writeTimeout);
       _diagLog('create(): _db.insert returned id=$id');
-      return song.copyWith(id: id);
+      return song.copyWith(id: id, syncId: syncId);
     } on TimeoutException {
       // The plugin call didn't reply in time. Rather than hang forever (the
       // observed bug) or blindly retry the insert (which would duplicate
       // the row if the original write actually did land), check whether it
       // already committed and, if so, recover the id from it instead of
-      // inserting again.
+      // inserting again. The sync id is unique, so this lookup is exact.
       _diagLog('create(): _db.insert timed out; checking whether it committed anyway');
-      final recovered = await _findJustInserted(map).timeout(
+      final recovered = await _findBySyncId(syncId).timeout(
         _writeTimeout,
         onTimeout: () => null,
       );
@@ -244,24 +249,13 @@ class _SqliteSongRepository implements SongRepository {
     }
   }
 
-  /// Looks up the row a just-attempted (but unconfirmed) insert would have
-  /// produced, matching on the fields that make it unique in practice
-  /// (karaoke_type/song_number/title/created_at — created_at is the
-  /// millisecond-precision timestamp this specific create() call used, so a
-  /// match here is effectively unambiguous). Used only to recover from a
-  /// lost insert() reply, never to decide whether to insert in the first
-  /// place.
-  Future<Song?> _findJustInserted(Map<String, Object?> map) async {
+  /// Used only to recover from a lost insert() reply, never to decide
+  /// whether to insert in the first place.
+  Future<Song?> _findBySyncId(String syncId) async {
     final rows = await _db.query(
       _table,
-      where: 'karaoke_type = ? AND song_number = ? AND title = ? AND created_at = ?',
-      whereArgs: [
-        map['karaoke_type'],
-        map['song_number'],
-        map['title'],
-        map['created_at'],
-      ],
-      orderBy: 'id DESC',
+      where: 'sync_id = ?',
+      whereArgs: [syncId],
       limit: 1,
     );
     if (rows.isEmpty) return null;
@@ -273,7 +267,10 @@ class _SqliteSongRepository implements SongRepository {
     if (song.id == null) {
       throw ArgumentError('Cannot update a song without an id.');
     }
-    final map = song.toDbMap();
+    // sync_id is immutable once assigned, whatever the caller's copy holds.
+    final map = song.toDbMap()
+      ..remove('sync_id')
+      ..['sync_updated_at_ms'] = nowUtcMs();
     _diagLog('update(): calling _db.update for id=${song.id}');
     try {
       await _db
@@ -297,16 +294,23 @@ class _SqliteSongRepository implements SongRepository {
   @override
   Future<void> delete(int id) async {
     // Deleting a song must also drop its folder_songs membership rows, or
-    // folder counts keep counting a song that no longer exists. Both writes
-    // happen in one transaction so a failure can't leave one without the
-    // other.
+    // folder counts keep counting a song that no longer exists. The row is
+    // still hard-deleted (so no query needs a "deleted" filter); a
+    // tombstone keyed by its sync id records the deletion for future sync.
+    // All in one transaction so none can happen without the others.
+    // Memberships removed here get no tombstones of their own: a deleted
+    // song implies all of its memberships are gone.
     await _db.transaction((txn) async {
+      final syncId = await _syncIdOf(txn, _table, id);
       await txn.delete(
         'folder_songs',
         where: 'song_id = ?',
         whereArgs: [id],
       );
-      await txn.delete(_table, where: 'id = ?', whereArgs: [id]);
+      final deleted = await txn.delete(_table, where: 'id = ?', whereArgs: [id]);
+      if (deleted > 0 && syncId != null) {
+        await recordTombstone(txn, TombstoneEntity.song, syncId);
+      }
     });
   }
 
@@ -334,14 +338,18 @@ class _SqliteFolderRepository implements FolderRepository {
   @override
   Future<List<Folder>> getAll() async {
     final rows = await _db.query(_table, orderBy: 'name COLLATE NOCASE');
-    return rows.map(Folder.fromMap).toList();
+    return rows.map(Folder.fromDbMap).toList();
   }
 
   @override
   Future<Folder> create(Folder folder) async {
-    final map = folder.toMap()..remove('id');
+    final syncId = hasSyncId(folder.syncId) ? folder.syncId! : generateSyncId();
+    final map = folder.toDbMap()
+      ..remove('id')
+      ..['sync_id'] = syncId
+      ..['sync_updated_at_ms'] = nowUtcMs();
     final id = await _db.insert(_table, map);
-    return folder.copyWith(id: id);
+    return folder.copyWith(id: id, syncId: syncId);
   }
 
   @override
@@ -349,47 +357,91 @@ class _SqliteFolderRepository implements FolderRepository {
     if (folder.id == null) {
       throw ArgumentError('Cannot update a folder without an id.');
     }
-    await _db.update(
-      _table,
-      folder.toMap(),
-      where: 'id = ?',
-      whereArgs: [folder.id],
-    );
+    final map = folder.toDbMap()
+      ..remove('sync_id')
+      ..['sync_updated_at_ms'] = nowUtcMs();
+    await _db.update(_table, map, where: 'id = ?', whereArgs: [folder.id]);
   }
 
   @override
   Future<void> delete(int id) async {
-    await _db.delete(_table, where: 'id = ?', whereArgs: [id]);
-    await _db.delete(_joinTable, where: 'folder_id = ?', whereArgs: [id]);
+    // Removes the folder and its membership rows only — never the songs.
+    // One transaction (previously two separate statements) so a crash
+    // can't leave memberships pointing at a deleted folder.
+    await _db.transaction((txn) async {
+      final syncId = await _syncIdOf(txn, _table, id);
+      await txn.delete(_joinTable, where: 'folder_id = ?', whereArgs: [id]);
+      final deleted = await txn.delete(_table, where: 'id = ?', whereArgs: [id]);
+      if (deleted > 0 && syncId != null) {
+        await recordTombstone(txn, TombstoneEntity.folder, syncId);
+      }
+    });
   }
 
   @override
   Future<void> addSong(int folderId, int songId) async {
-    await _db.insert(
-      _joinTable,
-      {
-        'folder_id': folderId,
-        'song_id': songId,
-        'added_at': DateTime.now().toIso8601String(),
-      },
-      conflictAlgorithm: ConflictAlgorithm.ignore,
-    );
+    await _db.transaction((txn) async {
+      // Checked explicitly instead of relying on insert()'s return value
+      // for an ignored conflict, which differs between sqflite platforms.
+      final existing = await txn.query(
+        _joinTable,
+        columns: ['folder_id'],
+        where: 'folder_id = ? AND song_id = ?',
+        whereArgs: [folderId, songId],
+      );
+      if (existing.isNotEmpty) return; // already a member: unchanged
+      await txn.insert(
+        _joinTable,
+        {
+          'folder_id': folderId,
+          'song_id': songId,
+          'added_at': DateTime.now().toIso8601String(),
+          'sync_updated_at_ms': nowUtcMs(),
+        },
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+      // Re-adding a previously removed song: the membership is live again,
+      // so its removal tombstone no longer applies.
+      final folderSyncId = await _syncIdOf(txn, _table, folderId);
+      final songSyncId = await _syncIdOf(txn, 'songs', songId);
+      if (folderSyncId != null && songSyncId != null) {
+        await txn.delete(
+          'sync_tombstones',
+          where: 'entity_type = ? AND sync_id = ? AND related_sync_id = ?',
+          whereArgs: [TombstoneEntity.folderSong, folderSyncId, songSyncId],
+        );
+      }
+    });
   }
 
   @override
   Future<void> removeSong(int folderId, int songId) async {
-    await _db.delete(
-      _joinTable,
-      where: 'folder_id = ? AND song_id = ?',
-      whereArgs: [folderId, songId],
-    );
+    await _db.transaction((txn) async {
+      final removed = await txn.delete(
+        _joinTable,
+        where: 'folder_id = ? AND song_id = ?',
+        whereArgs: [folderId, songId],
+      );
+      if (removed > 0) {
+        final folderSyncId = await _syncIdOf(txn, _table, folderId);
+        final songSyncId = await _syncIdOf(txn, 'songs', songId);
+        if (folderSyncId != null && songSyncId != null) {
+          await recordTombstone(
+            txn,
+            TombstoneEntity.folderSong,
+            folderSyncId,
+            relatedSyncId: songSyncId,
+          );
+        }
+      }
+    });
   }
 
   @override
   Future<List<int>> getSongIds(int folderId) async {
     // Joined against `songs` so a folder_songs row left over from a song
-    // deletion (e.g. one that predates this fix, before the on-open
-    // cleanup runs) never counts as a member.
+    // deletion (e.g. one that predates the transactional delete) never
+    // counts as a member.
     final rows = await _db.rawQuery(
       '''
       SELECT fs.song_id AS song_id

@@ -43,6 +43,12 @@ class Song {
   final DateTime createdAt;
   final DateTime updatedAt;
 
+  /// Stable cross-device id (UUID v4) for future cloud sync. Assigned by
+  /// the SQLite repository on create and never changed afterwards; the
+  /// local integer [id] stays the in-app identity. SQLite only — not part
+  /// of the Web JSON ([toMap]/[fromMap]), which is unchanged.
+  final String? syncId;
+
   const Song({
     this.id,
     required this.karaokeType,
@@ -58,6 +64,7 @@ class Song {
     this.favorite = false,
     required this.createdAt,
     required this.updatedAt,
+    this.syncId,
   });
 
   Song copyWith({
@@ -75,6 +82,7 @@ class Song {
     bool? favorite,
     DateTime? createdAt,
     DateTime? updatedAt,
+    String? syncId,
   }) {
     return Song(
       id: id ?? this.id,
@@ -91,6 +99,7 @@ class Song {
       favorite: favorite ?? this.favorite,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      syncId: syncId ?? this.syncId,
     );
   }
 
@@ -157,6 +166,7 @@ class Song {
       'favorite': favorite ? 1 : 0,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
+      if (syncId != null) 'sync_id': syncId,
     };
   }
 
@@ -190,6 +200,7 @@ class Song {
       favorite: (map['favorite'] as int?) == 1,
       createdAt: DateTime.parse(map['created_at'] as String),
       updatedAt: DateTime.parse(map['updated_at'] as String),
+      syncId: map['sync_id'] as String?,
     );
   }
 }
