@@ -7,6 +7,7 @@ import '../models/song_options.dart';
 import '../storage/local_storage.dart';
 import 'song_bulk_actions.dart';
 import 'song_edit_sheet.dart';
+import 'song_status_filter.dart';
 import 'widgets/animated_song_list.dart';
 import 'widgets/app_header.dart';
 import 'widgets/filter_chip_bar.dart';
@@ -16,7 +17,7 @@ import 'widgets/responsive_center.dart';
 import 'widgets/selection_action_bar.dart';
 import 'widgets/song_card.dart';
 
-const _filterAll = '전체';
+const _filterAll = kSongFilterAll;
 const _filterFavorite = '즐겨찾기';
 const _filterOptions = [
   _filterAll,
@@ -100,7 +101,7 @@ class SongListScreenState extends State<SongListScreen> {
       case _filterAll:
         return songs;
       default:
-        return songs.where((s) => s.practiceStatus == _filter).toList();
+        return filterSongsByPracticeStatus(songs, _filter);
     }
   }
 

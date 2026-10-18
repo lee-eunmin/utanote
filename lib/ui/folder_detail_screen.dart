@@ -6,7 +6,9 @@ import '../storage/local_storage.dart';
 import '../theme/app_theme.dart';
 import 'song_bulk_actions.dart';
 import 'song_edit_sheet.dart';
+import 'song_status_filter.dart';
 import 'widgets/animated_song_list.dart';
+import 'widgets/filter_chip_bar.dart';
 import 'widgets/pickers.dart';
 import 'widgets/responsive_center.dart';
 import 'widgets/selection_action_bar.dart';
@@ -37,6 +39,9 @@ class _FolderDetailScreenState extends State<FolderDetailScreen> {
   bool _loading = true;
   final Set<int> _selected = {};
 
+  /// In-memory only: every folder opens on '전체'.
+  String _statusFilter = kSongFilterAll;
+
   bool get _selectionMode => _selected.isNotEmpty;
   int? get _folderId => widget.folder.id;
 
@@ -44,6 +49,18 @@ class _FolderDetailScreenState extends State<FolderDetailScreen> {
   void initState() {
     super.initState();
     _reload();
+  }
+
+  @override
+  void didUpdateWidget(covariant FolderDetailScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Defensive: if this state is ever reused for a different folder,
+    // start that folder fresh instead of carrying over the old filter.
+    if (oldWidget.folder.id != widget.folder.id) {
+      _statusFilter = kSongFilterAll;
+      _selected.clear();
+      _reload();
+    }
   }
 
   @override
@@ -67,10 +84,14 @@ class _FolderDetailScreenState extends State<FolderDetailScreen> {
     if (!mounted) return;
     setState(() {
       _allInFolder = songs;
-      _displayed = _applySearch(songs);
+      _displayed = _applyFilters(songs);
       _loading = false;
     });
   }
+
+  /// Search, then status filter — both only over this folder's songs.
+  List<Song> _applyFilters(List<Song> songs) =>
+      filterSongsByPracticeStatus(_applySearch(songs), _statusFilter);
 
   List<Song> _applySearch(List<Song> songs) {
     final query = _searchController.text.trim().toLowerCase();
@@ -84,7 +105,26 @@ class _FolderDetailScreenState extends State<FolderDetailScreen> {
   }
 
   void _onSearchChanged() {
-    setState(() => _displayed = _applySearch(_allInFolder));
+    setState(() => _displayed = _applyFilters(_allInFolder));
+  }
+
+  void _onStatusFilterChanged(String filter) {
+    setState(() {
+      _statusFilter = filter;
+      _displayed = _applyFilters(_allInFolder);
+    });
+  }
+
+  Widget _buildEmpty() {
+    final String message;
+    if (_allInFolder.isEmpty) {
+      message = '이 폴더에 노래가 없습니다.';
+    } else if (_statusFilter != kSongFilterAll) {
+      message = '해당 상태의 곡이 없습니다.';
+    } else {
+      message = '검색 결과가 없습니다.';
+    }
+    return Center(child: Text(message));
   }
 
   void _toggleSelected(Song song) {
@@ -174,12 +214,19 @@ class _FolderDetailScreenState extends State<FolderDetailScreen> {
                 onChanged: (_) => _onSearchChanged(),
               ),
               const SizedBox(height: 14),
+              FilterChipBar(
+                key: const Key('folderStatusFilterBar'),
+                options: kPracticeStatusFilterOptions,
+                selected: _statusFilter,
+                onSelected: _onStatusFilterChanged,
+              ),
+              const SizedBox(height: 4),
               Expanded(
                 child: _loading
                     ? const Center(child: CircularProgressIndicator())
                     : AnimatedSongList(
                         songs: _displayed,
-                        empty: const Center(child: Text('이 폴더에 노래가 없습니다.')),
+                        empty: _buildEmpty(),
                         itemBuilder: (context, song) {
                           final selected =
                               song.id != null && _selected.contains(song.id);
