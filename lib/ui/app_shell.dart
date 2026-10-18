@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../ads/ads_consent_controller.dart';
+import '../ads/list_ad_source.dart';
 import '../storage/local_storage.dart';
 import 'folders_screen.dart';
 import 'song_list_screen.dart';
@@ -10,8 +12,15 @@ import 'widgets/app_bottom_nav.dart';
 /// destinations. Each tab keeps its own state via [IndexedStack].
 class AppShell extends StatefulWidget {
   final LocalStorage storage;
+  final ListAdSourceFactory? songListAdSourceFactory;
+  final AdsConsentController? adsConsent;
 
-  const AppShell({super.key, required this.storage});
+  const AppShell({
+    super.key,
+    required this.storage,
+    this.songListAdSourceFactory,
+    this.adsConsent,
+  });
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -47,7 +56,12 @@ class _AppShellState extends State<AppShell> {
   @override
   Widget build(BuildContext context) {
     final screens = [
-      SongListScreen(key: _songListKey, storage: widget.storage),
+      SongListScreen(
+        key: _songListKey,
+        storage: widget.storage,
+        adSourceFactory: widget.songListAdSourceFactory,
+        adsConsent: widget.adsConsent,
+      ),
       FoldersScreen(key: _foldersKey, storage: widget.storage),
       TjSearchScreen(key: _tjSearchKey, storage: widget.storage),
     ];

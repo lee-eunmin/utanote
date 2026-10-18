@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../ads/ads_consent_controller.dart';
+import '../ads/list_ad_source.dart';
 import '../models/song.dart';
 import '../models/song_options.dart';
 import '../storage/local_storage.dart';
@@ -9,6 +11,7 @@ import 'widgets/animated_song_list.dart';
 import 'widgets/app_header.dart';
 import 'widgets/filter_chip_bar.dart';
 import 'widgets/pickers.dart';
+import 'widgets/privacy_options_button.dart';
 import 'widgets/responsive_center.dart';
 import 'widgets/selection_action_bar.dart';
 import 'widgets/song_card.dart';
@@ -27,7 +30,18 @@ const _filterOptions = [
 class SongListScreen extends StatefulWidget {
   final LocalStorage storage;
 
-  const SongListScreen({super.key, required this.storage});
+  /// Supplies in-list native ads (Android only). Null → no ads.
+  final ListAdSourceFactory? adSourceFactory;
+
+  /// Ad consent state (Android only); drives the privacy settings entry.
+  final AdsConsentController? adsConsent;
+
+  const SongListScreen({
+    super.key,
+    required this.storage,
+    this.adSourceFactory,
+    this.adsConsent,
+  });
 
   @override
   State<SongListScreen> createState() => SongListScreenState();
@@ -42,18 +56,21 @@ class SongListScreenState extends State<SongListScreen> {
   bool _loading = true;
   int _totalCount = 0;
   final Set<int> _selected = {};
+  ListAdSource? _ads;
 
   bool get _selectionMode => _selected.isNotEmpty;
 
   @override
   void initState() {
     super.initState();
+    _ads = widget.adSourceFactory?.call();
     _reload();
   }
 
   @override
   void dispose() {
     _searchController.dispose();
+    _ads?.dispose();
     super.dispose();
   }
 
@@ -174,10 +191,16 @@ class SongListScreenState extends State<SongListScreen> {
               children: [
                 AppHeader(
                   subtitle: '$_totalCount곡',
-                  trailing: HeaderIconButton(
-                    key: const Key('addSongButton'),
-                    icon: Icons.add_rounded,
-                    onPressed: () => _openEditor(),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      PrivacyOptionsButton(consent: widget.adsConsent),
+                      HeaderIconButton(
+                        key: const Key('addSongButton'),
+                        icon: Icons.add_rounded,
+                        onPressed: () => _openEditor(),
+                      ),
+                    ],
                   ),
                 ),
                 TextField(
@@ -201,6 +224,7 @@ class SongListScreenState extends State<SongListScreen> {
                       ? const Center(child: CircularProgressIndicator())
                       : AnimatedSongList(
                           songs: _displayed,
+                          adBuilder: _ads?.buildAd,
                           empty: const Center(child: Text('노래가 없습니다.')),
                           itemBuilder: (context, song) {
                             final selected =
