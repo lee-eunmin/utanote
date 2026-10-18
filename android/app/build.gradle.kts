@@ -46,8 +46,19 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("release")
+            // Minification stays on (Flutter default). Add our keep rules
+            // for WorkManager/Room reflection — see proguard-rules.pro.
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
+}
+
+dependencies {
+    // Pin WorkManager (transitive via google_mobile_ads) to current stable.
+    implementation("androidx.work:work-runtime:2.11.2")
 }
 
 kotlin {
