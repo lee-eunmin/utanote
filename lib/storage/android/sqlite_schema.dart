@@ -10,7 +10,25 @@ import '../sync_id.dart';
 /// - 2: `songs.search_aliases`.
 /// - 3: cloud-sync readiness (Phase A): `sync_id` / `sync_updated_at_ms`
 ///   columns, `sync_tombstones`, `sync_meta`. No account or network code.
-const int kSongbookDatabaseVersion = 3;
+/// - 4: change tracking (Phase B-1): `sync_dirty` on `songs`, `folders`,
+///   `folder_songs` and `sync_tombstones`. Still no account or network code.
+const int kSongbookDatabaseVersion = 4;
+
+/// Column DDL for `sync_dirty`: 1 = changed locally and not yet confirmed
+/// in the cloud, 0 = matches what the cloud has. DEFAULT 1 means every row
+/// that exists when the column is added (all pre-v4 data) starts out as
+/// "needs upload", which is exactly what a first cloud upload must send.
+const String kSyncDirtyColumnDdl = 'INTEGER NOT NULL DEFAULT 1';
+
+/// Values of the `sync_dirty` column. Which one a write uses is decided
+/// only by the code path doing the write: local repository writes always
+/// use [dirty], `SqliteCloudApply` always uses [clean]. It is never derived
+/// from [SyncMetaKeys.syncApplyInProgress], so a user edit made while a
+/// cloud batch is mid-apply is still recorded as dirty.
+abstract final class SyncDirty {
+  static const int clean = 0;
+  static const int dirty = 1;
+}
 
 /// Entity types recorded in `sync_tombstones.entity_type`.
 abstract final class TombstoneEntity {
@@ -114,6 +132,13 @@ Future<void> ensureSchema(DatabaseExecutor db) async {
       PRIMARY KEY (entity_type, sync_id, related_sync_id)
     )
   ''');
+  // v4: change tracking. After sync_tombstones is guaranteed to exist, so
+  // fresh installs and upgrades both get the column through this path.
+  await _ensureColumn(db, 'songs', 'sync_dirty', kSyncDirtyColumnDdl);
+  await _ensureColumn(db, 'folders', 'sync_dirty', kSyncDirtyColumnDdl);
+  await _ensureColumn(db, 'folder_songs', 'sync_dirty', kSyncDirtyColumnDdl);
+  await _ensureColumn(db, 'sync_tombstones', 'sync_dirty', kSyncDirtyColumnDdl);
+
   await db.execute('''
     CREATE TABLE IF NOT EXISTS sync_meta (
       key TEXT PRIMARY KEY NOT NULL,
@@ -226,11 +251,17 @@ Future<void> writeSyncMetaIfMissing(
 }
 
 /// Records (or refreshes) a deletion so a future sync can propagate it.
+///
+/// The defaults describe a *local* deletion: now, and dirty (needs
+/// upload). The cloud-apply path passes the remote deletion time and
+/// [SyncDirty.clean], because the cloud already has that deletion.
 Future<void> recordTombstone(
   DatabaseExecutor db,
   String entityType,
   String syncId, {
   String relatedSyncId = '',
+  int? deletedAtMs,
+  int syncDirty = SyncDirty.dirty,
 }) {
   return db.insert(
     'sync_tombstones',
@@ -238,7 +269,8 @@ Future<void> recordTombstone(
       'entity_type': entityType,
       'sync_id': syncId,
       'related_sync_id': relatedSyncId,
-      'deleted_at_ms': nowUtcMs(),
+      'deleted_at_ms': deletedAtMs ?? nowUtcMs(),
+      'sync_dirty': syncDirty,
     },
     conflictAlgorithm: ConflictAlgorithm.replace,
   );

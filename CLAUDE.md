@@ -33,7 +33,7 @@ layer.
 - The legacy `songs`, `folders`, `folder_songs` schema (see below) must
   keep working as-is. Migrations may only **add** columns/tables, never
   drop, rename, or rewrite existing ones.
-- Current schema version is **3** (`kSongbookDatabaseVersion` in
+- Current schema version is **4** (`kSongbookDatabaseVersion` in
   `lib/storage/android/sqlite_schema.dart`). The legacy app's database has
   `user_version` 0, so sqflite runs `onCreate` (not `onUpgrade`) for
   upgrading users. All schema work therefore lives in one idempotent,
@@ -120,7 +120,7 @@ CREATE TABLE folder_songs (
 - No login, Firebase, Supabase, or remote/user database yet — and none
   should be added without an explicit decision to change that.
 
-## 7. Cloud-sync readiness (schema v3, Android only, no network code)
+## 7. Cloud-sync readiness (schema v3–v4, Android only, no network code)
 
 - `songs.sync_id` / `folders.sync_id`: UUID v4 (`lib/storage/sync_id.dart`),
   unique-indexed, backfilled only where NULL/empty, assigned on create and
@@ -135,4 +135,14 @@ CREATE TABLE folder_songs (
 - `sync_meta(key, value)`: account/sync keys are reserved but empty
   (`SyncMetaKeys`). The legacy orphan `folder_songs` cleanup runs once and
   is skipped while `sync_apply_in_progress` is set.
+- v4: `sync_dirty INTEGER NOT NULL DEFAULT 1` on `songs`, `folders`,
+  `folder_songs`, `sync_tombstones` (pre-v4 rows start dirty = "needs
+  upload"). User writes through the repositories always set 1; only
+  `SqliteLocalStorage.cloudApply` (`lib/storage/cloud_apply.dart`) writes
+  0. The path decides, never `sync_apply_in_progress`. Cloud upserts never
+  revive a song/folder that has a local tombstone.
+- The pre-v3 backup (`songbook.pre_sync_v3.backup.db`) is pinned to
+  target v3 (`kPreSyncBackupTargetVersion`); a separate
+  `songbook.pre_cloud_sync_v4.backup.db` is planned before the first cloud
+  upload (not built yet).
 - Web storage is unchanged (no sync ids yet).

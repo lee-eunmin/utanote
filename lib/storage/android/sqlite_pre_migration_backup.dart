@@ -29,6 +29,13 @@ import 'package:sqflite/sqflite.dart';
 ///   confirmed successful cloud sync, not part of this code.
 const String preSyncBackupFileName = 'songbook.pre_sync_v3.backup.db';
 
+/// The schema version [preSyncBackupFileName] protects: it is taken only
+/// for databases older than v3. Pinned (not tied to the current schema
+/// version) so that later additive migrations such as v3 -> v4 don't make a
+/// file named "pre_sync_v3" out of a database that is already v3. The
+/// separate pre-cloud-upload backup belongs to the future sync layer.
+const int kPreSyncBackupTargetVersion = 3;
+
 enum PreMigrationBackupStatus {
   /// No database file yet — fresh install, nothing to back up.
   notNeededFreshInstall,

@@ -480,7 +480,7 @@ void main() {
   // Fresh installs and new rows.
   // ---------------------------------------------------------------------
   group('fresh install', () {
-    test('creates the full v3 schema and no backup', () async {
+    test('creates the full current schema and no backup', () async {
       final storage = await launch();
       final db = storage.databaseForTesting;
       expect(storage.lastBackupResult!.status, PreMigrationBackupStatus.notNeededFreshInstall);
@@ -492,7 +492,7 @@ void main() {
       expect(await columnsOf(db, 'folders'), containsAll(['sync_id', 'sync_updated_at_ms']));
       expect(await columnsOf(db, 'folder_songs'), contains('sync_updated_at_ms'));
       expect(await columnsOf(db, 'sync_tombstones'),
-          {'entity_type', 'sync_id', 'related_sync_id', 'deleted_at_ms'});
+          {'entity_type', 'sync_id', 'related_sync_id', 'deleted_at_ms', 'sync_dirty'});
       expect(await columnsOf(db, 'sync_meta'), {'key', 'value'});
 
       // Account/sync markers are reserved but empty.

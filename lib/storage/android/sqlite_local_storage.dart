@@ -8,10 +8,12 @@ import 'package:sqflite/sqflite.dart';
 
 import '../../models/folder.dart';
 import '../../models/song.dart';
+import '../cloud_apply.dart';
 import '../folder_repository.dart';
 import '../local_storage.dart';
 import '../song_repository.dart';
 import '../sync_id.dart';
+import 'sqlite_cloud_apply.dart';
 import 'sqlite_pre_migration_backup.dart';
 import 'sqlite_schema.dart';
 
@@ -48,6 +50,7 @@ class SqliteLocalStorage implements LocalStorage {
   Database? _db;
   SongRepository? _songs;
   FolderRepository? _folders;
+  CloudApplyStore? _cloudApply;
 
   /// Outcome of the one-time pre-migration backup attempted by [init].
   PreMigrationBackupResult? lastBackupResult;
@@ -64,7 +67,7 @@ class SqliteLocalStorage implements LocalStorage {
     // migration itself is additive-only and transactional).
     final backup = await backupBeforeMigrationIfNeeded(
       databasePath: path,
-      targetVersion: kSongbookDatabaseVersion,
+      targetVersion: kPreSyncBackupTargetVersion,
     );
     lastBackupResult = backup;
 
@@ -87,6 +90,7 @@ class SqliteLocalStorage implements LocalStorage {
     );
     _songs = _SqliteSongRepository(_db!);
     _folders = _SqliteFolderRepository(_db!);
+    _cloudApply = SqliteCloudApplyStore(_db!);
   }
 
   /// Raw connection, for tests that assert on the on-disk schema/rows.
@@ -100,6 +104,7 @@ class SqliteLocalStorage implements LocalStorage {
     _db = null;
     _songs = null;
     _folders = null;
+    _cloudApply = null;
   }
 
   static Future<void> _recordBackupResult(
@@ -166,6 +171,18 @@ class SqliteLocalStorage implements LocalStorage {
     return repo;
   }
 
+  /// Path for writing changes received from the cloud (stored clean,
+  /// `sync_dirty = 0`). User edits go through [songs]/[folders] instead,
+  /// which always store rows as dirty. Not part of [LocalStorage]: Web has
+  /// no sync yet.
+  CloudApplyStore get cloudApply {
+    final store = _cloudApply;
+    if (store == null) {
+      throw StateError('SqliteLocalStorage.init() must be awaited first.');
+    }
+    return store;
+  }
+
   @override
   FolderRepository get folders {
     final repo = _folders;
@@ -223,7 +240,8 @@ class _SqliteSongRepository implements SongRepository {
     final map = song.toDbMap()
       ..remove('id')
       ..['sync_id'] = syncId
-      ..['sync_updated_at_ms'] = nowUtcMs();
+      ..['sync_updated_at_ms'] = nowUtcMs()
+      ..['sync_dirty'] = SyncDirty.dirty;
     _diagLog('create(): calling _db.insert for "${song.title}"');
     try {
       final id = await _db.insert(_table, map).timeout(_writeTimeout);
@@ -270,7 +288,8 @@ class _SqliteSongRepository implements SongRepository {
     // sync_id is immutable once assigned, whatever the caller's copy holds.
     final map = song.toDbMap()
       ..remove('sync_id')
-      ..['sync_updated_at_ms'] = nowUtcMs();
+      ..['sync_updated_at_ms'] = nowUtcMs()
+      ..['sync_dirty'] = SyncDirty.dirty;
     _diagLog('update(): calling _db.update for id=${song.id}');
     try {
       await _db
@@ -347,7 +366,8 @@ class _SqliteFolderRepository implements FolderRepository {
     final map = folder.toDbMap()
       ..remove('id')
       ..['sync_id'] = syncId
-      ..['sync_updated_at_ms'] = nowUtcMs();
+      ..['sync_updated_at_ms'] = nowUtcMs()
+      ..['sync_dirty'] = SyncDirty.dirty;
     final id = await _db.insert(_table, map);
     return folder.copyWith(id: id, syncId: syncId);
   }
@@ -359,7 +379,8 @@ class _SqliteFolderRepository implements FolderRepository {
     }
     final map = folder.toDbMap()
       ..remove('sync_id')
-      ..['sync_updated_at_ms'] = nowUtcMs();
+      ..['sync_updated_at_ms'] = nowUtcMs()
+      ..['sync_dirty'] = SyncDirty.dirty;
     await _db.update(_table, map, where: 'id = ?', whereArgs: [folder.id]);
   }
 
@@ -397,6 +418,7 @@ class _SqliteFolderRepository implements FolderRepository {
           'song_id': songId,
           'added_at': DateTime.now().toIso8601String(),
           'sync_updated_at_ms': nowUtcMs(),
+          'sync_dirty': SyncDirty.dirty,
         },
         conflictAlgorithm: ConflictAlgorithm.ignore,
       );
