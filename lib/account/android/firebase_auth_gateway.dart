@@ -9,6 +9,9 @@ import 'package:google_sign_in/google_sign_in.dart';
 import '../../firebase_options.dart';
 import '../../storage/android/sqlite_local_storage.dart';
 import '../../storage/local_storage.dart';
+import '../../sync/android/firestore_cloud_sync_backend.dart';
+import '../../sync/cloud_sync_controller.dart';
+import '../../sync/initial_sync_engine.dart';
 import '../account_controller.dart';
 import '../auth_gateway.dart';
 
@@ -23,10 +26,24 @@ AccountController? _controller;
 AccountController? startAccount(LocalStorage storage) {
   if (!_accountSupported) return null;
   if (storage is! SqliteLocalStorage) return null;
-  return _controller ??= AccountController(
+  final existing = _controller;
+  if (existing != null) return existing;
+  final controller = AccountController(
     gateway: FirebaseAuthGateway(),
     boundAccount: _SqliteBoundAccount(storage),
-  )..start();
+  );
+  // User-initiated first cloud connection only (no automatic sync).
+  // Firestore is touched only when the user starts it while signed in,
+  // i.e. after Firebase has been initialized by sign-in.
+  controller.cloudSync = CloudSyncController(
+    engine: InitialSyncEngine(
+      store: storage.syncStore,
+      backend: FirestoreCloudSyncBackend(),
+    ),
+    account: controller,
+  );
+  _controller = controller;
+  return controller..start();
 }
 
 class _SqliteBoundAccount implements BoundAccountSource {

@@ -67,6 +67,28 @@ abstract final class SyncMetaKeys {
 
   /// Set if the pre-v3 backup could not be created (message only).
   static const preSyncBackupError = 'pre_sync_backup_error';
+
+  // --- Phase B-3: first cloud connection ---------------------------------
+
+  /// Email of [accountUid], for display only. Written with the binding.
+  static const accountEmailHint = 'account_email_hint';
+
+  /// `in_progress` / `failed` / `done` (see `InitialSyncState`).
+  static const initialSyncState = 'initial_sync_state';
+
+  /// `upload` / `restore` / `merge` / `bind_only`.
+  static const initialSyncMode = 'initial_sync_mode';
+
+  /// Account an unfinished initial sync was started for.
+  static const initialSyncUid = 'initial_sync_uid';
+
+  /// Last initial-sync failure (log text only).
+  static const initialSyncError = 'initial_sync_error';
+
+  /// File name and time of `songbook.pre_cloud_sync_v4.backup.db`.
+  static const preCloudSyncBackupFile = 'pre_cloud_sync_backup_file';
+  static const preCloudSyncBackupCreatedAtMs =
+      'pre_cloud_sync_backup_created_at_ms';
 }
 
 /// Brings any database — fresh, legacy `user_version` 0, or v2 — to the

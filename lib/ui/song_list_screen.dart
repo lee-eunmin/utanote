@@ -201,7 +201,10 @@ class SongListScreenState extends State<SongListScreen> {
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      AccountButton(account: widget.account),
+                      AccountButton(
+                        account: widget.account,
+                        onSheetClosed: _reload,
+                      ),
                       PrivacyOptionsButton(consent: widget.adsConsent),
                       HeaderIconButton(
                         key: const Key('addSongButton'),

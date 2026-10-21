@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../account/account_controller.dart';
+import '../../sync/cloud_sync_controller.dart';
+import '../../sync/sync_records.dart';
 import '../../theme/app_theme.dart';
 import 'app_header.dart';
 
@@ -9,7 +11,11 @@ import 'app_header.dart';
 class AccountButton extends StatelessWidget {
   final AccountController? account;
 
-  const AccountButton({super.key, required this.account});
+  /// Called after the sheet closes (a restore/merge may have changed the
+  /// local songs and folders).
+  final VoidCallback? onSheetClosed;
+
+  const AccountButton({super.key, required this.account, this.onSheetClosed});
 
   @override
   Widget build(BuildContext context) {
@@ -32,7 +38,10 @@ class AccountButton extends StatelessWidget {
               icon: signedIn
                   ? Icons.account_circle_rounded
                   : Icons.account_circle_outlined,
-              onPressed: () => showAccountSheet(context, account),
+              onPressed: () async {
+                await showAccountSheet(context, account);
+                onSheetClosed?.call();
+              },
             ),
           ),
         );
@@ -65,7 +74,7 @@ class AccountSheet extends StatelessWidget {
         ),
         padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
         child: ListenableBuilder(
-          listenable: account,
+          listenable: Listenable.merge([account, ?account.cloudSync]),
           builder: (context, _) => Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -164,10 +173,15 @@ class AccountSheet extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
-          const _Note(
-            '클라우드 백업은 준비 중이에요. 로그아웃해도 이 기기의 노래와 폴더는 '
-            '삭제되지 않습니다.',
-          ),
+          if (account.cloudSync case final cloud?) ...[
+            _CloudBackupSection(cloud: cloud),
+            const SizedBox(height: 12),
+            const _Note('로그아웃해도 이 기기의 노래와 폴더는 삭제되지 않습니다.'),
+          ] else
+            const _Note(
+              '클라우드 백업은 준비 중이에요. 로그아웃해도 이 기기의 노래와 폴더는 '
+              '삭제되지 않습니다.',
+            ),
           const SizedBox(height: 16),
           SizedBox(
             width: double.infinity,
@@ -202,4 +216,128 @@ class _Note extends StatelessWidget {
       ),
     );
   }
+}
+
+/// First cloud connection (Phase B-3). Runs only when the user taps it.
+class _CloudBackupSection extends StatelessWidget {
+  final CloudSyncController cloud;
+
+  const _CloudBackupSection({required this.cloud});
+
+  @override
+  Widget build(BuildContext context) {
+    switch (cloud.phase) {
+      case CloudSyncPhase.unavailable:
+        return const SizedBox.shrink();
+      case CloudSyncPhase.notConnected:
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const _Note('이 기기의 노래와 폴더를 Google 계정에 백업할 수 있어요.'),
+            const SizedBox(height: 10),
+            FilledButton.icon(
+              key: const Key('cloudSetupButton'),
+              onPressed: cloud.busy ? null : cloud.startSetup,
+              icon: const Icon(Icons.cloud_upload_outlined, size: 18),
+              label: const Text('클라우드 백업 설정'),
+            ),
+          ],
+        );
+      case CloudSyncPhase.checking:
+      case CloudSyncPhase.syncing:
+        return Row(
+          key: const Key('cloudSyncProgress'),
+          children: [
+            const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _Note(
+                cloud.phase == CloudSyncPhase.checking
+                    ? '이 기기와 클라우드의 데이터를 확인하는 중…'
+                    : '클라우드에 연결하는 중… 앱을 닫지 말아 주세요.',
+              ),
+            ),
+          ],
+        );
+      case CloudSyncPhase.needsMergeDecision:
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _Note(
+              '이 기기(${_summary(cloud.localSummary)})와 '
+              '클라우드(${_summary(cloud.cloudSummary)})에 모두 데이터가 있어요. '
+              '합치면 양쪽의 노래와 폴더가 모두 남아요. 같은 항목은 더 최근에 바뀐 '
+              '쪽으로 맞춰지고, 한쪽에서 삭제한 항목은 양쪽에서 삭제돼요.',
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: TextButton(
+                    key: const Key('cloudMergeCancel'),
+                    onPressed: cloud.busy ? null : cloud.cancelMerge,
+                    child: const Text('취소'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: FilledButton(
+                    key: const Key('cloudMergeConfirm'),
+                    onPressed: cloud.busy ? null : cloud.confirmMerge,
+                    child: const Text('합치기'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        );
+      case CloudSyncPhase.connected:
+        return const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 4),
+          child: Row(
+            key: Key('cloudConnected'),
+            children: [
+              Icon(
+                Icons.cloud_done_rounded,
+                size: 18,
+                color: AppColors.textSecondary,
+              ),
+              SizedBox(width: 8),
+              Text(
+                '백업 연결됨',
+                style: TextStyle(fontSize: 14, color: AppColors.textPrimary),
+              ),
+            ],
+          ),
+        );
+      case CloudSyncPhase.failed:
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Text(
+                cloud.message ?? '클라우드 연결에 실패했어요.',
+                key: const Key('cloudSyncMessage'),
+                style: const TextStyle(fontSize: 13, color: AppColors.danger),
+              ),
+            ),
+            const SizedBox(height: 10),
+            FilledButton.icon(
+              key: const Key('cloudRetryButton'),
+              onPressed: cloud.busy ? null : cloud.startSetup,
+              icon: const Icon(Icons.refresh_rounded, size: 18),
+              label: const Text('다시 시도'),
+            ),
+          ],
+        );
+    }
+  }
+
+  static String _summary(SyncDataSummary? s) =>
+      s == null ? '-' : '노래 ${s.songs}곡 · 폴더 ${s.folders}개';
 }

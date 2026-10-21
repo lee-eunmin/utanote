@@ -126,9 +126,11 @@ CREATE TABLE folder_songs (
   configure` overwrites it; the google-services Gradle plugin is applied
   only when `android/app/google-services.json` exists. Without config the
   app runs normally with sign-in hidden.
-- No Firestore / cloud data sync yet (Phase B-3), and no Supabase.
+- Phase B-3 (Android only): user-initiated **first cloud connection**
+  only — see section 8. No automatic/periodic/realtime/background sync,
+  no multi-account switching, no Web/iOS sync, no Supabase.
 
-## 7. Cloud-sync readiness (schema v3–v4, Android only, no network code)
+## 7. Cloud-sync readiness (schema v3–v4, Android only)
 
 - `songs.sync_id` / `folders.sync_id`: UUID v4 (`lib/storage/sync_id.dart`),
   unique-indexed, backfilled only where NULL/empty, assigned on create and
@@ -140,8 +142,8 @@ CREATE TABLE folder_songs (
 - `sync_tombstones(entity_type, sync_id, related_sync_id, deleted_at_ms)`:
   rows are still hard-deleted; deletes of songs/folders and removals of a
   song from a folder are recorded here in the same transaction.
-- `sync_meta(key, value)`: account/sync keys are reserved but empty
-  (`SyncMetaKeys`). The legacy orphan `folder_songs` cleanup runs once and
+- `sync_meta(key, value)`: account/sync keys (`SyncMetaKeys`) are written
+  only by the B-3 first connection (section 8). The legacy orphan `folder_songs` cleanup runs once and
   is skipped while `sync_apply_in_progress` is set.
 - v4: `sync_dirty INTEGER NOT NULL DEFAULT 1` on `songs`, `folders`,
   `folder_songs`, `sync_tombstones` (pre-v4 rows start dirty = "needs
@@ -150,7 +152,30 @@ CREATE TABLE folder_songs (
   0. The path decides, never `sync_apply_in_progress`. Cloud upserts never
   revive a song/folder that has a local tombstone.
 - The pre-v3 backup (`songbook.pre_sync_v3.backup.db`) is pinned to
-  target v3 (`kPreSyncBackupTargetVersion`); a separate
-  `songbook.pre_cloud_sync_v4.backup.db` is planned before the first cloud
-  upload (not built yet).
+  target v3 (`kPreSyncBackupTargetVersion`) and never touched by B-3.
 - Web storage is unchanged (no sync ids yet).
+
+## 8. First cloud connection (Phase B-3, Android only)
+
+- Firestore: `users/{uid}/songs/{songSyncId}`, `users/{uid}/folders/{folderSyncId}`,
+  `users/{uid}/folderSongs/{folderSyncId}_{songSyncId}`. Format in
+  `lib/sync/cloud_sync_backend.dart` (`CloudDocCodec`). Never hard-deleted
+  (`deleted: true` + `deletedAtMs`); local integer ids never go to the cloud.
+  Offline persistence is off; SQLite `sync_dirty` stays the source of truth.
+- Rules: `firestore.rules` (owner-only, no revive of deleted docs, no hard
+  delete, id must match sync id). Tests: `firestore_rules_test/` (emulator,
+  `demo-` project only). Rules are deployed by the user, never automatically.
+- Pure-Dart engine `lib/sync/initial_sync_engine.dart` + planner
+  `initial_sync_plan.dart`; SQLite side `lib/storage/android/sqlite_sync_store.dart`;
+  Firestore side `lib/sync/android/firestore_cloud_sync_backend.dart`.
+- Order: classify → `songbook.pre_cloud_sync_v4.backup.db` (once, never
+  overwritten; failure aborts) → `initial_sync_state=in_progress` → upload
+  (≤400/batch) → ONE SQLite transaction: apply cloud winners (clean),
+  guarded dirty clear, write `account_uid`. Local data is untouched on failure.
+- Both sides with data → user picks 합치기/취소 only. Merge: same sync id →
+  deletion wins, else newer `updatedAtMs` (legacy NULL → `updated_at`), tie
+  → cloud. Different ids are never de-duplicated.
+- `sync_dirty` is cleared only via `clearSyncDirtyIfUnchanged` tokens
+  (version at snapshot time must still match).
+- `account_uid` is written only after a fully successful run; sign-out never
+  clears it.

@@ -42,6 +42,12 @@ class SqliteCloudApplyStore implements CloudApplyStore {
   }
 }
 
+/// The clean write path bound to an already-open transaction, for callers
+/// that must read and apply inside one transaction (the initial sync's
+/// final step). The caller is responsible for `sync_apply_in_progress`.
+CloudApplyWriter sqliteCloudApplyWriter(Transaction txn) =>
+    _SqliteCloudApplyWriter(txn);
+
 class _SqliteCloudApplyWriter implements CloudApplyWriter {
   final Transaction _txn;
 

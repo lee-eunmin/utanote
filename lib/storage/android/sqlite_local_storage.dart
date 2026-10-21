@@ -14,8 +14,10 @@ import '../local_storage.dart';
 import '../song_repository.dart';
 import '../sync_id.dart';
 import 'sqlite_cloud_apply.dart';
+import '../../sync/local_sync_store.dart';
 import 'sqlite_pre_migration_backup.dart';
 import 'sqlite_schema.dart';
+import 'sqlite_sync_store.dart';
 
 /// Bound on how long a single write's plugin round-trip is allowed to hang
 /// before we treat it as suspect. This is a *safety net*, not the primary
@@ -51,6 +53,7 @@ class SqliteLocalStorage implements LocalStorage {
   SongRepository? _songs;
   FolderRepository? _folders;
   CloudApplyStore? _cloudApply;
+  LocalSyncStore? _syncStore;
 
   /// Outcome of the one-time pre-migration backup attempted by [init].
   PreMigrationBackupResult? lastBackupResult;
@@ -91,6 +94,7 @@ class SqliteLocalStorage implements LocalStorage {
     _songs = _SqliteSongRepository(_db!);
     _folders = _SqliteFolderRepository(_db!);
     _cloudApply = SqliteCloudApplyStore(_db!);
+    _syncStore = SqliteLocalSyncStore(_db!, path);
   }
 
   /// Raw connection, for tests that assert on the on-disk schema/rows.
@@ -105,6 +109,7 @@ class SqliteLocalStorage implements LocalStorage {
     _songs = null;
     _folders = null;
     _cloudApply = null;
+    _syncStore = null;
   }
 
   static Future<void> _recordBackupResult(
@@ -189,6 +194,15 @@ class SqliteLocalStorage implements LocalStorage {
   /// no sync yet.
   CloudApplyStore get cloudApply {
     final store = _cloudApply;
+    if (store == null) {
+      throw StateError('SqliteLocalStorage.init() must be awaited first.');
+    }
+    return store;
+  }
+
+  /// Local side of the first cloud connection (Phase B-3). Android only.
+  LocalSyncStore get syncStore {
+    final store = _syncStore;
     if (store == null) {
       throw StateError('SqliteLocalStorage.init() must be awaited first.');
     }

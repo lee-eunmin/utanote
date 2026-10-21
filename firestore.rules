@@ -1,0 +1,69 @@
+rules_version = '2';
+
+// UtaNote cloud backup (Phase B-3).
+//
+// Layout: users/{uid}/songs/{songSyncId}
+//         users/{uid}/folders/{folderSyncId}
+//         users/{uid}/folderSongs/{folderSyncId}_{songSyncId}
+//
+// - Only the signed-in owner (request.auth.uid == uid) can read or write.
+// - Documents are never hard-deleted; deletion is `deleted: true`.
+// - A deleted document can't be turned back into a live one.
+// - Document ids must match the sync ids inside them.
+// Everything else (any other path) is denied.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    function hasDeletedFlag() {
+      return request.resource.data.deleted is bool;
+    }
+
+    // An update may not revive a deleted document.
+    function keepsDeletion() {
+      return resource.data.get('deleted', false) != true
+          || request.resource.data.deleted == true;
+    }
+
+    match /users/{uid}/songs/{songId} {
+      allow read: if isOwner(uid);
+      allow create: if isOwner(uid)
+                    && request.resource.data.syncId == songId
+                    && hasDeletedFlag();
+      allow update: if isOwner(uid)
+                    && request.resource.data.syncId == songId
+                    && hasDeletedFlag()
+                    && keepsDeletion();
+      allow delete: if false;
+    }
+
+    match /users/{uid}/folders/{folderId} {
+      allow read: if isOwner(uid);
+      allow create: if isOwner(uid)
+                    && request.resource.data.syncId == folderId
+                    && hasDeletedFlag();
+      allow update: if isOwner(uid)
+                    && request.resource.data.syncId == folderId
+                    && hasDeletedFlag()
+                    && keepsDeletion();
+      allow delete: if false;
+    }
+
+    match /users/{uid}/folderSongs/{docId} {
+      function idMatches() {
+        return docId == request.resource.data.folderSyncId + '_'
+                        + request.resource.data.songSyncId;
+      }
+      allow read: if isOwner(uid);
+      allow create: if isOwner(uid) && idMatches() && hasDeletedFlag();
+      allow update: if isOwner(uid)
+                    && idMatches()
+                    && hasDeletedFlag()
+                    && keepsDeletion();
+      allow delete: if false;
+    }
+  }
+}

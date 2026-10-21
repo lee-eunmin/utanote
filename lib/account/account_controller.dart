@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../sync/cloud_sync_controller.dart';
 import 'auth_gateway.dart';
 
 enum AccountPhase {
@@ -29,6 +30,10 @@ class AccountController extends ChangeNotifier {
     required this._gateway,
     required this._boundAccount,
   });
+
+  /// First cloud connection for the signed-in account (Android only;
+  /// attached once at startup). Null → no cloud backup entry in the UI.
+  CloudSyncController? cloudSync;
 
   AccountPhase _phase = AccountPhase.initializing;
   AccountUser? _user;
@@ -112,6 +117,14 @@ class AccountController extends ChangeNotifier {
         _set(AccountPhase.signedOut);
       }
     }
+  }
+
+  /// Re-reads the device's account binding for the signed-in user, e.g.
+  /// after the first cloud connection wrote `account_uid`. Read-only.
+  Future<void> refreshLink() async {
+    final user = _user;
+    if (_phase != AccountPhase.signedIn || user == null) return;
+    await _applyUser(user, ++_generation);
   }
 
   /// Ends the cloud session only. Local songs/folders and

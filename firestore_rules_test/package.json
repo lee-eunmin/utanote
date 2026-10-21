@@ -1,0 +1,13 @@
+{
+  "name": "utanote-firestore-rules-test",
+  "private": true,
+  "description": "Security-rule tests for firestore.rules. Runs only against the local Firestore emulator with a demo- project id (never a real project). See README.md.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test rules.test.js"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "5.0.2",
+    "firebase": "12.18.0"
+  }
+}
