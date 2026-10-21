@@ -1,0 +1,55 @@
+{
+  "project_info": {
+    "project_number": "1021818890974",
+    "project_id": "utanote-50d07",
+    "storage_bucket": "utanote-50d07.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1021818890974:android:66fb9870660eeb98bcf04f",
+        "android_client_info": {
+          "package_name": "com.eungman.UTANOTE"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1021818890974-1v35qr3dfc6aelqrf0v5b4ksdna3q2v7.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.eungman.UTANOTE",
+            "certificate_hash": "fb6132b0226bc7e9e51dae65fe247a8960e23011"
+          }
+        },
+        {
+          "client_id": "1021818890974-ce6qd04ag9r93qs5sjfj6fo2l81ej2ss.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.eungman.UTANOTE",
+            "certificate_hash": "2c77a42bcc5af25b03dad179fa9dd7c66ee3db4b"
+          }
+        },
+        {
+          "client_id": "1021818890974-1ni0mvv5qij098p2mpdcs4ihtc5ilad9.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAejY73_YtcZDBDVl2__zE0c4UKWgmGAOs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1021818890974-1ni0mvv5qij098p2mpdcs4ihtc5ilad9.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

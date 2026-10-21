@@ -45,6 +45,9 @@ dependencies:
   # HTTP client for the TJ Media search API (server-side proxy in /api).
   http: ^1.2.2
   google_mobile_ads: ^9.1.0
+  firebase_core: ^5.0.0
+  firebase_auth: ^7.0.0
+  google_sign_in: ^7.2.0
 
 dev_dependencies:
   flutter_test:

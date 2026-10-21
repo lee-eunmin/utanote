@@ -7,6 +7,16 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Firebase / Google sign-in config, downloaded from the Firebase Console
+// (Android app com.eungman.UTANOTE) into android/app/google-services.json.
+// Applied only when present, so the app still builds before Firebase is
+// set up — sign-in then just shows as unavailable at runtime.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+} else {
+    logger.warn("google-services.json not found: Google sign-in will be unavailable in this build.")
+}
+
 val keystoreProperties = Properties()
 val keystorePropertiesFile = rootProject.file("key.properties")
 

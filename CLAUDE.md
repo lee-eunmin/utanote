@@ -117,8 +117,16 @@ CREATE TABLE folder_songs (
 - UI: song list, folders, and TJ search tabs (`lib/ui/`). TJ search goes
   through the `/api/tj-search` proxy (`api/tj-search.js`); AdMob native ads
   on Android.
-- No login, Firebase, Supabase, or remote/user database yet — and none
-  should be added without an explicit decision to change that.
+- Phase B-2: Firebase Auth + Google Sign-In only (`lib/account/`,
+  Android only; Web gets `account_stub.dart`). Sign-in never reads/writes
+  songs, folders, `sync_dirty` or `sync_meta.account_uid`; sign-out ends
+  the Firebase/Google session only. A device bound to another account
+  (`account_uid` ≠ signed-in uid) is signed straight back out.
+  `lib/firebase_options.dart` is a placeholder until `flutterfire
+  configure` overwrites it; the google-services Gradle plugin is applied
+  only when `android/app/google-services.json` exists. Without config the
+  app runs normally with sign-in hidden.
+- No Firestore / cloud data sync yet (Phase B-3), and no Supabase.
 
 ## 7. Cloud-sync readiness (schema v3–v4, Android only, no network code)
 

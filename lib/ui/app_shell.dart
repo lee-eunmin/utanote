@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../account/account_controller.dart';
 import '../ads/ads_consent_controller.dart';
 import '../ads/list_ad_source.dart';
 import '../storage/local_storage.dart';
@@ -14,12 +15,14 @@ class AppShell extends StatefulWidget {
   final LocalStorage storage;
   final ListAdSourceFactory? songListAdSourceFactory;
   final AdsConsentController? adsConsent;
+  final AccountController? account;
 
   const AppShell({
     super.key,
     required this.storage,
     this.songListAdSourceFactory,
     this.adsConsent,
+    this.account,
   });
 
   @override
@@ -61,6 +64,7 @@ class _AppShellState extends State<AppShell> {
         storage: widget.storage,
         adSourceFactory: widget.songListAdSourceFactory,
         adsConsent: widget.adsConsent,
+        account: widget.account,
       ),
       FoldersScreen(key: _foldersKey, storage: widget.storage),
       TjSearchScreen(key: _tjSearchKey, storage: widget.storage),

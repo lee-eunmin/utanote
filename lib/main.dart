@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'account/account.dart';
 import 'ads/ads.dart';
 import 'storage/local_storage.dart';
 import 'storage/local_storage_factory.dart';
@@ -14,11 +15,16 @@ Future<void> main() async {
   final adsConsent = startAds();
   final storage = createLocalStorage();
   await storage.init();
+  // Android only: starts Firebase sign-in in the background (not awaited).
+  // If Firebase isn't configured or fails, sign-in is just unavailable;
+  // the app and its local data are unaffected. Null on Web.
+  final account = startAccount(storage);
   runApp(
     UtaNoteApp(
       storage: storage,
       songListAdSourceFactory: songListAdSourceFactory(),
       adsConsent: adsConsent,
+      account: account,
     ),
   );
 }
@@ -32,11 +38,15 @@ class UtaNoteApp extends StatelessWidget {
   /// Ad consent state (Android only). Null → no ads, no privacy entry.
   final AdsConsentController? adsConsent;
 
+  /// Google sign-in (Android only). Null → no account entry.
+  final AccountController? account;
+
   const UtaNoteApp({
     super.key,
     required this.storage,
     this.songListAdSourceFactory,
     this.adsConsent,
+    this.account,
   });
 
   @override
@@ -49,6 +59,7 @@ class UtaNoteApp extends StatelessWidget {
         storage: storage,
         songListAdSourceFactory: songListAdSourceFactory,
         adsConsent: adsConsent,
+        account: account,
       ),
     );
   }

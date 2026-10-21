@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../account/account_controller.dart';
 import '../ads/ads_consent_controller.dart';
 import '../ads/list_ad_source.dart';
 import '../models/song.dart';
@@ -8,6 +9,7 @@ import '../storage/local_storage.dart';
 import 'song_bulk_actions.dart';
 import 'song_edit_sheet.dart';
 import 'song_status_filter.dart';
+import 'widgets/account_button.dart';
 import 'widgets/animated_song_list.dart';
 import 'widgets/app_header.dart';
 import 'widgets/filter_chip_bar.dart';
@@ -37,11 +39,15 @@ class SongListScreen extends StatefulWidget {
   /// Ad consent state (Android only); drives the privacy settings entry.
   final AdsConsentController? adsConsent;
 
+  /// Google sign-in state (Android only). Null → no account entry.
+  final AccountController? account;
+
   const SongListScreen({
     super.key,
     required this.storage,
     this.adSourceFactory,
     this.adsConsent,
+    this.account,
   });
 
   @override
@@ -195,6 +201,7 @@ class SongListScreenState extends State<SongListScreen> {
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      AccountButton(account: widget.account),
                       PrivacyOptionsButton(consent: widget.adsConsent),
                       HeaderIconButton(
                         key: const Key('addSongButton'),

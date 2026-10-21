@@ -171,6 +171,18 @@ class SqliteLocalStorage implements LocalStorage {
     return repo;
   }
 
+  /// The cloud account uid this database is bound to
+  /// (`sync_meta.account_uid`), or null if unbound. Read-only; sign-in
+  /// never writes it.
+  Future<String?> readBoundAccountUid() async {
+    final db = _db;
+    if (db == null) {
+      throw StateError('SqliteLocalStorage.init() must be awaited first.');
+    }
+    final value = await readSyncMeta(db, SyncMetaKeys.accountUid);
+    return (value == null || value.isEmpty) ? null : value;
+  }
+
   /// Path for writing changes received from the cloud (stored clean,
   /// `sync_dirty = 0`). User edits go through [songs]/[folders] instead,
   /// which always store rows as dirty. Not part of [LocalStorage]: Web has
