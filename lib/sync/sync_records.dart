@@ -141,6 +141,13 @@ class LocalFolderRow {
   });
 }
 
+/// Membership revision assumed when none is stored: a live membership is
+/// its first add (1); a removal is at least add + remove (2). Same values
+/// as the v5 local backfill, so pre-revision data compares consistently
+/// on every device and in the cloud.
+const int kDefaultLiveMembershipRevision = 1;
+const int kDefaultRemovedMembershipRevision = 2;
+
 class LocalMembershipRow {
   final String folderSyncId;
   final String songSyncId;
@@ -148,12 +155,16 @@ class LocalMembershipRow {
   final int? syncUpdatedAtMs;
   final bool dirty;
 
+  /// Membership revision (`folder_songs.revision`).
+  final int revision;
+
   const LocalMembershipRow({
     required this.folderSyncId,
     required this.songSyncId,
     required this.addedAt,
     required this.syncUpdatedAtMs,
     required this.dirty,
+    this.revision = kDefaultLiveMembershipRevision,
   });
 
   String get key => membershipDocId(folderSyncId, songSyncId);
@@ -168,13 +179,54 @@ class LocalTombstone {
   final int deletedAtMs;
   final bool dirty;
 
+  /// Membership revision of a `folder_song` removal; null for song/folder
+  /// tombstones.
+  final int? revision;
+
   const LocalTombstone({
     required this.entityType,
     required this.syncId,
     required this.relatedSyncId,
     required this.deletedAtMs,
     required this.dirty,
+    this.revision,
   });
+
+  int get membershipRevision => revision ?? kDefaultRemovedMembershipRevision;
+}
+
+/// Outcome of comparing one membership's local and cloud states.
+enum MembershipWinner { local, cloud, same }
+
+/// Folder-membership conflict rule (Phase B-4A revisions):
+/// 1. the higher revision wins, whatever its state — so an explicit re-add
+///    (a newer revision) beats an older removal;
+/// 2. same revision: a removal beats a live state (deletion wins within a
+///    generation);
+/// 3. same revision, both live: newer change wins, a tie goes to the cloud;
+///    identical states are [MembershipWinner.same].
+MembershipWinner compareMembership({
+  required int localRevision,
+  required bool localDeleted,
+  required int localChangedMs,
+  String? localAddedAt,
+  required int cloudRevision,
+  required bool cloudDeleted,
+  required int cloudChangedMs,
+  String? cloudAddedAt,
+}) {
+  if (localRevision != cloudRevision) {
+    return localRevision > cloudRevision
+        ? MembershipWinner.local
+        : MembershipWinner.cloud;
+  }
+  if (localDeleted && cloudDeleted) return MembershipWinner.same;
+  if (localDeleted) return MembershipWinner.local;
+  if (cloudDeleted) return MembershipWinner.cloud;
+  if (localAddedAt == cloudAddedAt) return MembershipWinner.same;
+  return localChangedMs > cloudChangedMs
+      ? MembershipWinner.local
+      : MembershipWinner.cloud;
 }
 
 /// Everything the initial sync needs from the local database. Only
@@ -226,12 +278,16 @@ class CloudSong {
   final bool deleted;
   final int? deletedAtMs;
 
+  /// Server write time (Firestore `serverUpdatedAt`), when known.
+  final int? serverUpdatedAtMs;
+
   const CloudSong({
     required this.syncId,
     required this.data,
     required this.updatedAtMs,
     this.deleted = false,
     this.deletedAtMs,
+    this.serverUpdatedAtMs,
   });
 
   bool get isLive => !deleted && data != null;
@@ -244,12 +300,16 @@ class CloudFolder {
   final bool deleted;
   final int? deletedAtMs;
 
+  /// Server write time (Firestore `serverUpdatedAt`), when known.
+  final int? serverUpdatedAtMs;
+
   const CloudFolder({
     required this.syncId,
     required this.data,
     required this.updatedAtMs,
     this.deleted = false,
     this.deletedAtMs,
+    this.serverUpdatedAtMs,
   });
 
   bool get isLive => !deleted && data != null;
@@ -263,6 +323,13 @@ class CloudMembership {
   final bool deleted;
   final int? deletedAtMs;
 
+  /// Server write time (Firestore `serverUpdatedAt`), when known.
+  final int? serverUpdatedAtMs;
+
+  /// Membership revision; documents written before revisions existed get
+  /// the defaults (live 1, deleted 2) when parsed.
+  final int revision;
+
   const CloudMembership({
     required this.folderSyncId,
     required this.songSyncId,
@@ -270,7 +337,12 @@ class CloudMembership {
     required this.updatedAtMs,
     this.deleted = false,
     this.deletedAtMs,
-  });
+    this.serverUpdatedAtMs,
+    int? revision,
+  }) : revision = revision ??
+            (deleted
+                ? kDefaultRemovedMembershipRevision
+                : kDefaultLiveMembershipRevision);
 
   String get key => membershipDocId(folderSyncId, songSyncId);
   bool get isLive => !deleted && addedAt != null;

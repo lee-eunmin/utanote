@@ -4,6 +4,7 @@ import '../account/account_controller.dart';
 import '../ads/ads_consent_controller.dart';
 import '../ads/list_ad_source.dart';
 import '../storage/local_storage.dart';
+import '../sync/cloud_sync_controller.dart';
 import 'folders_screen.dart';
 import 'song_list_screen.dart';
 import 'tj_search_screen.dart';
@@ -38,6 +39,47 @@ class _AppShellState extends State<AppShell> {
   final _songListKey = GlobalKey<SongListScreenState>();
   final _foldersKey = GlobalKey<FoldersScreenState>();
   final _tjSearchKey = GlobalKey<TjSearchScreenState>();
+
+  CloudSyncController? _cloudSync;
+  int _seenDataVersion = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _attachCloudSync();
+  }
+
+  @override
+  void didUpdateWidget(AppShell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.account?.cloudSync != widget.account?.cloudSync) {
+      _cloudSync?.removeListener(_onCloudSync);
+      _attachCloudSync();
+    }
+  }
+
+  @override
+  void dispose() {
+    _cloudSync?.removeListener(_onCloudSync);
+    super.dispose();
+  }
+
+  void _attachCloudSync() {
+    _cloudSync = widget.account?.cloudSync;
+    _seenDataVersion = _cloudSync?.dataVersion ?? 0;
+    _cloudSync?.addListener(_onCloudSync);
+  }
+
+  /// A sync/restore changed local songs or folders: every tab reloads from
+  /// the repository right away (they all stay alive in the IndexedStack).
+  void _onCloudSync() {
+    final version = _cloudSync?.dataVersion ?? 0;
+    if (version == _seenDataVersion) return;
+    _seenDataVersion = version;
+    _songListKey.currentState?.refresh();
+    _foldersKey.currentState?.refresh();
+    _tjSearchKey.currentState?.refreshAddedSongs();
+  }
 
   void _onTabTap(int i) {
     setState(() => _index = i);

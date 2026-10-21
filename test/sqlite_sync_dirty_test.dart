@@ -249,10 +249,14 @@ void main() {
     return db.query(table, columns: columns, orderBy: 'rowid');
   }
 
-  /// Rows with the given columns only (i.e. without `sync_dirty`).
+  /// Rows without the columns added after v3 (`sync_dirty` in v4,
+  /// `revision` in v5), i.e. exactly the values the v3 database had. The
+  /// added columns are checked by their own tests.
   List<Map<String, Object?>> withoutDirty(List<Map<String, Object?>> rows) {
     return [
-      for (final r in rows) {...r}..remove('sync_dirty'),
+      for (final r in rows) {...r}
+        ..remove('sync_dirty')
+        ..remove('revision'),
     ];
   }
 
@@ -293,12 +297,12 @@ void main() {
   // ---------------------------------------------------------------------
   // v3 -> v4 upgrade.
   // ---------------------------------------------------------------------
-  group('v3 -> v4 upgrade', () {
+  group('v3 -> current (v$kSongbookDatabaseVersion) upgrade', () {
     test('every existing song value is preserved exactly', () async {
       await createV3Database();
       final storage = await launch();
       final db = storage.databaseForTesting;
-      expect(await db.getVersion(), 4);
+      expect(await db.getVersion(), kSongbookDatabaseVersion);
       expect(
         withoutDirty(await rowsOf(db, 'songs')),
         _v3Songs,

@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import '../account/account_controller.dart';
 import '../account/auth_gateway.dart';
 import 'initial_sync_engine.dart';
+import 'manual_sync.dart';
 import 'sync_records.dart';
 
 enum CloudSyncPhase {
@@ -28,15 +29,23 @@ enum CloudSyncPhase {
   failed,
 }
 
-/// UI state of the first cloud connection. Only runs when the user asks:
-/// no automatic sync of any kind.
+/// State of a manual "지금 동기화" run while [CloudSyncPhase.connected].
+enum ManualSyncStatus { idle, running, succeeded, failed }
+
+/// UI state of the first cloud connection and of manual syncs. Only runs
+/// when the user asks: no automatic sync of any kind.
 class CloudSyncController extends ChangeNotifier {
   final InitialSyncEngine _engine;
   final AccountController _account;
 
+  /// Manual two-way sync for a bound device (Phase B-4A). Null → no
+  /// "지금 동기화" button.
+  final ManualSyncEngine? _manual;
+
   CloudSyncController({
     required this._engine,
     required this._account,
+    this._manual,
   }) {
     _account.addListener(_onAccountChanged);
     _onAccountChanged();
@@ -48,6 +57,9 @@ class CloudSyncController extends ChangeNotifier {
   String? _uid;
   bool _busy = false;
   int _dataVersion = 0;
+  ManualSyncStatus _manualStatus = ManualSyncStatus.idle;
+  String? _manualMessage;
+  int? _lastSyncAtMs;
 
   CloudSyncPhase get phase => _phase;
 
@@ -63,6 +75,15 @@ class CloudSyncController extends ChangeNotifier {
   /// Bumped whenever local songs/folders may have changed (restore/merge),
   /// so screens know to reload.
   int get dataVersion => _dataVersion;
+
+  bool get canSyncNow => _manual != null;
+  ManualSyncStatus get manualStatus => _manualStatus;
+
+  /// User-facing notice for [ManualSyncStatus.failed].
+  String? get manualMessage => _manualMessage;
+
+  /// UTC epoch ms of the last fully successful sync, if known.
+  int? get lastSyncAtMs => _lastSyncAtMs;
 
   void _onAccountChanged() {
     if (_busy) return; // re-evaluated when the run ends
@@ -80,7 +101,9 @@ class CloudSyncController extends ChangeNotifier {
       _uid = user.uid;
       _pending = null;
       _message = null;
+      final entering = _phase != CloudSyncPhase.connected;
       _set(CloudSyncPhase.connected);
+      if (entering) _loadLastSync();
       return;
     }
     if (link != AccountLinkStatus.unlinked) {
@@ -171,6 +194,56 @@ class CloudSyncController extends ChangeNotifier {
     _dataVersion++;
     await _account.refreshLink();
     _set(CloudSyncPhase.connected);
+    await _loadLastSync();
+  }
+
+  /// "지금 동기화" / "다시 시도". Only while connected; ignored while any
+  /// run is going.
+  Future<void> syncNow() async {
+    final manual = _manual;
+    final user = _account.user;
+    if (manual == null || _busy || user == null) return;
+    if (_phase != CloudSyncPhase.connected ||
+        _account.linkStatus != AccountLinkStatus.sameAccount) {
+      return;
+    }
+    _busy = true;
+    _manualMessage = null;
+    _manualStatus = ManualSyncStatus.running;
+    notifyListeners();
+    try {
+      final result = await manual.syncNow(user.uid);
+      if (result.localChanges > 0) _dataVersion++;
+      _lastSyncAtMs = await manual.lastSuccessfulSyncAtMs();
+      _manualStatus = ManualSyncStatus.succeeded;
+    } catch (e) {
+      _manualStatus = ManualSyncStatus.failed;
+      _manualMessage = e is ManualSyncFailure &&
+              e.kind == ManualSyncFailureKind.accountMismatch
+          ? '이 기기는 다른 계정에 연결되어 있어 동기화할 수 없어요.'
+          : '동기화하지 못했어요. 이 기기의 데이터는 그대로예요.';
+    } finally {
+      _busy = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _loadLastSync() async {
+    final manual = _manual;
+    if (manual == null) return;
+    try {
+      _lastSyncAtMs = await manual.lastSuccessfulSyncAtMs();
+      notifyListeners();
+    } catch (_) {
+      // Display only.
+    }
+  }
+
+  /// Simulates a sync that changed local data (screen-refresh tests).
+  @visibleForTesting
+  void debugMarkDataChanged() {
+    _dataVersion++;
+    notifyListeners();
   }
 
   void _fail(String message) {

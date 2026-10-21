@@ -107,6 +107,7 @@ class _SqliteCloudApplyWriter implements CloudApplyWriter {
     required String songSyncId,
     required DateTime addedAt,
     required int updatedAtMs,
+    int revision = kFirstMembershipRevision,
   }) async {
     final folderId = await _localIdOf('folders', folderSyncId);
     final songId = await _localIdOf('songs', songSyncId);
@@ -117,6 +118,7 @@ class _SqliteCloudApplyWriter implements CloudApplyWriter {
       'added_at': addedAt.toIso8601String(),
       'sync_updated_at_ms': updatedAtMs,
       'sync_dirty': SyncDirty.clean,
+      'revision': revision,
     };
     final updated = await _txn.update(
       'folder_songs',
@@ -186,12 +188,21 @@ class _SqliteCloudApplyWriter implements CloudApplyWriter {
     required String folderSyncId,
     required String songSyncId,
     required int deletedAtMs,
+    int? revision,
   }) async {
     _requireSyncId(folderSyncId);
     _requireSyncId(songSyncId);
     final folderId = await _localIdOf('folders', folderSyncId);
     final songId = await _localIdOf('songs', songSyncId);
+    int? liveRevision;
     if (folderId != null && songId != null) {
+      final rows = await _txn.query(
+        'folder_songs',
+        columns: ['revision'],
+        where: 'folder_id = ? AND song_id = ?',
+        whereArgs: [folderId, songId],
+      );
+      if (rows.isNotEmpty) liveRevision = rows.first['revision'] as int?;
       await _txn.delete(
         'folder_songs',
         where: 'folder_id = ? AND song_id = ?',
@@ -205,6 +216,10 @@ class _SqliteCloudApplyWriter implements CloudApplyWriter {
       relatedSyncId: songSyncId,
       deletedAtMs: deletedAtMs,
       syncDirty: SyncDirty.clean,
+      revision: revision ??
+          (liveRevision != null
+              ? liveRevision + 1
+              : kLegacyMembershipRemovalRevision),
     );
   }
 

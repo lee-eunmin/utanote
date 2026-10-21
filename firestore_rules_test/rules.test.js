@@ -55,15 +55,19 @@ const liveFolder = (syncId = FOLDER) => ({
   deletedAtMs: null,
 });
 
-const liveMembership = () => ({
+const liveMembership = (revision = 1) => ({
   folderSyncId: FOLDER,
   songSyncId: SONG,
   addedAt: '2024-01-01T00:00:00.000',
+  revision,
   updatedAtMs: 1704067200000,
   serverUpdatedAt: serverTimestamp(),
   deleted: false,
   deletedAtMs: null,
 });
+
+const membershipRemoval = (revision) =>
+  deletion({ folderSyncId: FOLDER, songSyncId: SONG, revision });
 
 const deletion = (ids) => ({
   ...ids,
@@ -173,14 +177,73 @@ describe('data integrity', () => {
     await assertSucceeds(setDoc(songRef(db), deletion({ syncId: SONG }), { merge: true }));
   });
 
-  test('a deleted membership cannot be revived', async () => {
+  test('membership: removal at a new or the same revision is allowed', async () => {
+    await seedAlice(); // live, revision 1
+    const db = alice();
+    const ref = doc(db, 'users/alice/folderSongs', MEMBERSHIP);
+    await assertSucceeds(setDoc(ref, membershipRemoval(2), { merge: true }));
+    // Recording the same removal again (same generation) is fine.
+    await assertSucceeds(setDoc(ref, membershipRemoval(2), { merge: true }));
+  });
+
+  test('membership: a stale or same-revision revive is rejected', async () => {
     await seedAlice();
     const db = alice();
     const ref = doc(db, 'users/alice/folderSongs', MEMBERSHIP);
-    await assertSucceeds(
-      setDoc(ref, deletion({ folderSyncId: FOLDER, songSyncId: SONG }), { merge: true }),
-    );
-    await assertFails(setDoc(ref, liveMembership()));
+    await assertSucceeds(setDoc(ref, membershipRemoval(2), { merge: true }));
+    await assertFails(setDoc(ref, liveMembership(1))); // older
+    await assertFails(setDoc(ref, liveMembership(2))); // same revision
+    await assertFails(setDoc(ref, { deleted: false }, { merge: true })); // keeps 2
+  });
+
+  test('membership: an explicit re-add with a higher revision is allowed', async () => {
+    await seedAlice();
+    const db = alice();
+    const ref = doc(db, 'users/alice/folderSongs', MEMBERSHIP);
+    await assertSucceeds(setDoc(ref, membershipRemoval(2), { merge: true }));
+    await assertSucceeds(setDoc(ref, liveMembership(3)));
+    await assertSucceeds(setDoc(ref, membershipRemoval(4), { merge: true }));
+    await assertFails(setDoc(ref, liveMembership(4)));
+    await assertSucceeds(setDoc(ref, liveMembership(5)));
+  });
+
+  test('membership: the revision never goes down', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'users/alice/folderSongs', MEMBERSHIP), liveMembership(3));
+    });
+    const db = alice();
+    const ref = doc(db, 'users/alice/folderSongs', MEMBERSHIP);
+    await assertFails(setDoc(ref, liveMembership(2)));
+    await assertFails(setDoc(ref, membershipRemoval(2), { merge: true }));
+    await assertSucceeds(setDoc(ref, membershipRemoval(3), { merge: true }));
+  });
+
+  test('membership: every write needs an integer revision', async () => {
+    const db = alice();
+    const ref = doc(db, 'users/alice/folderSongs', MEMBERSHIP);
+    const noRevision = liveMembership();
+    delete noRevision.revision;
+    await assertFails(setDoc(ref, noRevision));
+    await assertFails(setDoc(ref, liveMembership('3')));
+    await assertSucceeds(setDoc(ref, liveMembership(1)));
+  });
+
+  test('membership written before revisions: deleted counts as 2', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      // Shape of a B-3 upload: no revision field.
+      const legacy = deletion({ folderSyncId: FOLDER, songSyncId: SONG });
+      await setDoc(doc(ctx.firestore(), 'users/alice/folderSongs', MEMBERSHIP), legacy);
+    });
+    const db = alice();
+    const ref = doc(db, 'users/alice/folderSongs', MEMBERSHIP);
+    await assertFails(setDoc(ref, liveMembership(2)));
+    await assertSucceeds(setDoc(ref, liveMembership(3)));
+  });
+
+  test('another user cannot re-add into alice data, whatever the revision', async () => {
+    await seedAlice();
+    const ref = doc(bob(), 'users/alice/folderSongs', MEMBERSHIP);
+    await assertFails(setDoc(ref, liveMembership(99)));
   });
 
   test('documents are never hard-deleted', async () => {

@@ -296,7 +296,7 @@ class _CloudBackupSection extends StatelessWidget {
           ],
         );
       case CloudSyncPhase.connected:
-        return const Padding(
+        const connected = Padding(
           padding: EdgeInsets.symmetric(horizontal: 4),
           child: Row(
             key: Key('cloudConnected'),
@@ -313,6 +313,63 @@ class _CloudBackupSection extends StatelessWidget {
               ),
             ],
           ),
+        );
+        if (!cloud.canSyncNow) return connected;
+        final running = cloud.manualStatus == ManualSyncStatus.running;
+        final last = cloud.lastSyncAtMs;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            connected,
+            const SizedBox(height: 6),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Text(
+                last == null
+                    ? '아직 동기화한 적이 없어요.'
+                    : '마지막 동기화: ${formatSyncTime(last)}',
+                key: const Key('cloudLastSync'),
+                style: AppTextStyles.meta,
+              ),
+            ),
+            if (cloud.manualStatus == ManualSyncStatus.succeeded)
+              const Padding(
+                padding: EdgeInsets.fromLTRB(4, 6, 4, 0),
+                child: Text(
+                  '동기화 완료',
+                  key: Key('cloudSyncDone'),
+                  style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+                ),
+              ),
+            if (cloud.manualStatus == ManualSyncStatus.failed)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(4, 6, 4, 0),
+                child: Text(
+                  cloud.manualMessage ?? '동기화하지 못했어요. 이 기기의 데이터는 그대로예요.',
+                  key: const Key('cloudSyncFailed'),
+                  style: const TextStyle(fontSize: 13, color: AppColors.danger),
+                ),
+              ),
+            const SizedBox(height: 10),
+            FilledButton.icon(
+              key: const Key('cloudSyncNowButton'),
+              onPressed: cloud.busy ? null : cloud.syncNow,
+              icon: running
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.sync_rounded, size: 18),
+              label: Text(
+                running
+                    ? '동기화하는 중…'
+                    : cloud.manualStatus == ManualSyncStatus.failed
+                        ? '다시 시도'
+                        : '지금 동기화',
+              ),
+            ),
+          ],
         );
       case CloudSyncPhase.failed:
         return Column(
@@ -340,4 +397,11 @@ class _CloudBackupSection extends StatelessWidget {
 
   static String _summary(SyncDataSummary? s) =>
       s == null ? '-' : '노래 ${s.songs}곡 · 폴더 ${s.folders}개';
+}
+
+/// Local-time display of a UTC epoch-ms sync time, e.g. "10월 22일 15:04".
+String formatSyncTime(int utcMs) {
+  final t = DateTime.fromMillisecondsSinceEpoch(utcMs, isUtc: true).toLocal();
+  String two(int v) => v.toString().padLeft(2, '0');
+  return '${t.month}월 ${t.day}일 ${two(t.hour)}:${two(t.minute)}';
 }

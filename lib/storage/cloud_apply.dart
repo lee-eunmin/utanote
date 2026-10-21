@@ -60,13 +60,15 @@ abstract class CloudApplyWriter {
     required int updatedAtMs,
   });
 
-  /// Makes the song a member of the folder. Both must already exist
-  /// locally. Clears any removal record for this membership.
+  /// Makes the song a member of the folder at membership [revision]. Both
+  /// must already exist locally. Clears any removal record for this
+  /// membership. (Which revision should win is the caller's decision.)
   Future<CloudApplyOutcome> upsertFolderSong({
     required String folderSyncId,
     required String songSyncId,
     required DateTime addedAt,
     required int updatedAtMs,
+    int revision = 1,
   });
 
   /// Deletes the song (and its folder memberships) and records the
@@ -78,10 +80,13 @@ abstract class CloudApplyWriter {
   /// the deletion as already synced.
   Future<void> applyFolderDeletion(String syncId, {required int deletedAtMs});
 
-  /// Removes the song from the folder and records the removal as synced.
+  /// Removes the song from the folder and records the removal as synced,
+  /// at membership [revision] (default: one above the local live
+  /// membership's revision, or the legacy removal revision).
   Future<void> applyFolderSongRemoval({
     required String folderSyncId,
     required String songSyncId,
     required int deletedAtMs,
+    int? revision,
   });
 }

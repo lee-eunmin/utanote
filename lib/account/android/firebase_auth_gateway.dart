@@ -12,6 +12,7 @@ import '../../storage/local_storage.dart';
 import '../../sync/android/firestore_cloud_sync_backend.dart';
 import '../../sync/cloud_sync_controller.dart';
 import '../../sync/initial_sync_engine.dart';
+import '../../sync/manual_sync.dart';
 import '../account_controller.dart';
 import '../auth_gateway.dart';
 
@@ -32,14 +33,13 @@ AccountController? startAccount(LocalStorage storage) {
     gateway: FirebaseAuthGateway(),
     boundAccount: _SqliteBoundAccount(storage),
   );
-  // User-initiated first cloud connection only (no automatic sync).
-  // Firestore is touched only when the user starts it while signed in,
-  // i.e. after Firebase has been initialized by sign-in.
+  // User-initiated cloud work only: the first connection and "지금 동기화"
+  // (no automatic sync). Firestore is touched only when the user starts
+  // one while signed in, i.e. after Firebase has been initialized.
+  final backend = FirestoreCloudSyncBackend();
   controller.cloudSync = CloudSyncController(
-    engine: InitialSyncEngine(
-      store: storage.syncStore,
-      backend: FirestoreCloudSyncBackend(),
-    ),
+    engine: InitialSyncEngine(store: storage.syncStore, backend: backend),
+    manual: ManualSyncEngine(store: storage.syncStore, backend: backend),
     account: controller,
   );
   _controller = controller;

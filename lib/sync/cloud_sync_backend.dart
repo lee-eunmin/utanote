@@ -76,6 +76,25 @@ abstract class CloudSyncBackend {
   /// Applies [writes] (at most [maxBatchWrites]) atomically. Re-running
   /// the same writes is harmless: document ids are deterministic.
   Future<void> commit(String uid, List<CloudWrite> writes);
+
+  /// Documents whose server write time (`serverUpdatedAt`) is at or after
+  /// the given time, per collection; null = the whole collection. Parsed
+  /// records carry [CloudSong.serverUpdatedAtMs] etc. From the server only.
+  Future<CloudSnapshot> fetchChanged(
+    String uid, {
+    int? songsSinceMs,
+    int? foldersSinceMs,
+    int? folderSongsSinceMs,
+  });
+
+  /// The current cloud documents with these ids (missing ones are simply
+  /// absent from the result). From the server only.
+  Future<CloudSnapshot> fetchByIds(
+    String uid, {
+    Iterable<String> songIds = const [],
+    Iterable<String> folderIds = const [],
+    Iterable<String> membershipIds = const [],
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -137,8 +156,9 @@ abstract final class CloudDocCodec {
     String folderSyncId,
     String songSyncId,
     String addedAt,
-    int updatedAtMs,
-  ) {
+    int updatedAtMs, {
+    required int revision,
+  }) {
     final docId = membershipDocId(folderSyncId, songSyncId);
     return CloudWrite(
       collection: CloudCollections.folderSongs,
@@ -149,6 +169,7 @@ abstract final class CloudDocCodec {
         'folderSyncId': folderSyncId,
         'songSyncId': songSyncId,
         'addedAt': addedAt,
+        'revision': revision,
         'updatedAtMs': updatedAtMs,
         'serverUpdatedAt': cloudServerTimestamp,
         'deleted': false,
@@ -173,11 +194,16 @@ abstract final class CloudDocCodec {
         data: {'syncId': syncId, ..._deletionFields(deletedAtMs)},
       );
 
+  /// Deletion marker for a membership at [revision]: the removal's own
+  /// revision, or (when a deleted song/folder takes the membership with
+  /// it) the cloud document's current revision — same generation, so the
+  /// deletion wins without claiming a newer user change.
   static CloudWrite deleteMembership(
     String folderSyncId,
     String songSyncId,
-    int deletedAtMs,
-  ) {
+    int deletedAtMs, {
+    required int revision,
+  }) {
     final docId = membershipDocId(folderSyncId, songSyncId);
     return CloudWrite(
       collection: CloudCollections.folderSongs,
@@ -187,6 +213,7 @@ abstract final class CloudDocCodec {
       data: {
         'folderSyncId': folderSyncId,
         'songSyncId': songSyncId,
+        'revision': revision,
         ..._deletionFields(deletedAtMs),
       },
     );
@@ -236,6 +263,7 @@ abstract final class CloudDocCodec {
       updatedAtMs: _int(m['updatedAtMs']) ?? 0,
       deleted: deleted,
       deletedAtMs: _int(m['deletedAtMs']),
+      serverUpdatedAtMs: _int(m['serverUpdatedAt']),
     );
   }
 
@@ -257,6 +285,7 @@ abstract final class CloudDocCodec {
       updatedAtMs: _int(m['updatedAtMs']) ?? 0,
       deleted: deleted,
       deletedAtMs: _int(m['deletedAtMs']),
+      serverUpdatedAtMs: _int(m['serverUpdatedAt']),
     );
   }
 
@@ -279,6 +308,8 @@ abstract final class CloudDocCodec {
       updatedAtMs: _int(m['updatedAtMs']) ?? 0,
       deleted: deleted,
       deletedAtMs: _int(m['deletedAtMs']),
+      serverUpdatedAtMs: _int(m['serverUpdatedAt']),
+      revision: _int(m['revision']),
     );
   }
 

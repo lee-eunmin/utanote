@@ -33,7 +33,7 @@ layer.
 - The legacy `songs`, `folders`, `folder_songs` schema (see below) must
   keep working as-is. Migrations may only **add** columns/tables, never
   drop, rename, or rewrite existing ones.
-- Current schema version is **4** (`kSongbookDatabaseVersion` in
+- Current schema version is **5** (`kSongbookDatabaseVersion` in
   `lib/storage/android/sqlite_schema.dart`). The legacy app's database has
   `user_version` 0, so sqflite runs `onCreate` (not `onUpgrade`) for
   upgrading users. All schema work therefore lives in one idempotent,
@@ -179,3 +179,30 @@ CREATE TABLE folder_songs (
   (version at snapshot time must still match).
 - `account_uid` is written only after a fully successful run; sign-out never
   clears it.
+
+## 9. Manual two-way sync (Phase B-4A, Android only)
+
+- "지금 동기화" in the account sheet, only for a bound device. Still no
+  automatic trigger (start/resume/edit) of any kind.
+- `lib/sync/manual_sync.dart` (`ManualSyncEngine`): pull changed docs per
+  collection since `pull_cursor_{songs,folders,folder_songs}_ms`
+  (`serverUpdatedAt`, 60 s overlap; no cursor = full read) + look up the
+  cloud state of every locally dirty row → one SQLite transaction (aborts
+  unless `account_uid` == signed-in uid) applying deletion-wins /
+  newer-wins / tie-to-cloud → upload dirty rows (≤400/batch, guarded dirty
+  clear per batch) → only on full success raise cursors and
+  `last_successful_sync_at_ms`.
+- Songs/folders: a live row is never uploaded over a cloud `deleted: true`
+  doc (deletion always wins; the rules would reject the whole batch).
+- Folder memberships use **revisions** (schema v5): `folder_songs.revision`
+  (live) and `sync_tombstones.revision` (removal, `folder_song` rows only);
+  cloud field `revision`. Every user change is the next revision (add 1,
+  remove 2, re-add 3, ...). Winner: higher revision; same revision →
+  removal; both live → newer, tie → cloud (`compareMembership` in
+  `lib/sync/sync_records.dart`). A deleted song/folder still takes its
+  memberships with it regardless of revision. Pre-v5 data: live = 1,
+  removal = 2 (local backfill and cloud parse default), which keeps the old
+  "removal beats live" outcome for legacy data. Rules: revision never goes
+  down; a removed membership becomes live only with a higher revision.
+- Screens reload through `AppShell` when `CloudSyncController.dataVersion`
+  changes.

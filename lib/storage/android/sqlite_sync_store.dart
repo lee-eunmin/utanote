@@ -36,6 +36,8 @@ class SqliteLocalSyncStore implements LocalSyncStore {
       state: await read(SyncMetaKeys.initialSyncState),
       mode: await read(SyncMetaKeys.initialSyncMode),
       uid: await read(SyncMetaKeys.initialSyncUid),
+      lastSuccessfulSyncAtMs:
+          int.tryParse(await read(SyncMetaKeys.lastSuccessfulSyncAtMs) ?? ''),
     );
   }
 
@@ -162,6 +164,116 @@ class SqliteLocalSyncStore implements LocalSyncStore {
   @override
   Future<int> clearSyncDirtyIfUnchanged(List<SyncDirtyToken> tokens) =>
       _db.transaction((txn) => clearSyncDirtyIfUnchangedIn(txn, tokens));
+
+  // --- Phase B-4A: manual incremental sync ---------------------------------
+
+  @override
+  Future<PullCursors> readPullCursors() async {
+    Future<int?> read(String key) async =>
+        int.tryParse(await readSyncMeta(_db, key) ?? '');
+    return PullCursors(
+      songsMs: await read(SyncMetaKeys.pullCursorSongsMs),
+      foldersMs: await read(SyncMetaKeys.pullCursorFoldersMs),
+      folderSongsMs: await read(SyncMetaKeys.pullCursorFolderSongsMs),
+    );
+  }
+
+  @override
+  Future<int> applyIncremental({
+    required String uid,
+    required Future<IncrementalApplyOutcome> Function(
+      LocalSyncSnapshot fresh,
+      CloudApplyWriter writer,
+    ) apply,
+  }) async {
+    final changes = await _db.transaction((txn) async {
+      await _requireBound(txn, uid);
+      await writeSyncMetaIfMissing(
+        txn,
+        SyncMetaKeys.syncApplyInProgress,
+        nowUtcMs().toString(),
+      );
+      final fresh = await readLocalSyncSnapshot(txn);
+      final outcome = await apply(fresh, sqliteCloudApplyWriter(txn));
+      await clearSyncDirtyIfUnchangedIn(txn, outcome.cleanTokens);
+      await markSyncDirtyIn(txn, outcome.markDirty);
+      return outcome.localChanges;
+    });
+    await _db.delete(
+      'sync_meta',
+      where: 'key = ?',
+      whereArgs: [SyncMetaKeys.syncApplyInProgress],
+    );
+    return changes;
+  }
+
+  @override
+  Future<void> commitIncrementalSuccess({
+    required String uid,
+    required PullCursors cursors,
+    required int syncedAtMs,
+  }) async {
+    await _db.transaction((txn) async {
+      await _requireBound(txn, uid);
+      Future<void> raise(String key, int? value) async {
+        if (value == null) return;
+        final current = int.tryParse(await readSyncMeta(txn, key) ?? '');
+        if (current != null && current >= value) return;
+        await writeSyncMeta(txn, key, value.toString());
+      }
+
+      await raise(SyncMetaKeys.pullCursorSongsMs, cursors.songsMs);
+      await raise(SyncMetaKeys.pullCursorFoldersMs, cursors.foldersMs);
+      await raise(SyncMetaKeys.pullCursorFolderSongsMs, cursors.folderSongsMs);
+      await writeSyncMeta(
+        txn,
+        SyncMetaKeys.lastSuccessfulSyncAtMs,
+        syncedAtMs.toString(),
+      );
+    });
+  }
+
+  static Future<void> _requireBound(DatabaseExecutor txn, String uid) async {
+    final bound = await readSyncMeta(txn, SyncMetaKeys.accountUid);
+    if (bound == null || bound.isEmpty || bound != uid) {
+      throw const SyncAccountMismatch();
+    }
+  }
+}
+
+/// Sets `sync_dirty = 1` on each token's row (version is ignored): the
+/// local version won a comparison and must be uploaded.
+Future<void> markSyncDirtyIn(
+  DatabaseExecutor db,
+  List<SyncDirtyToken> tokens,
+) async {
+  for (final t in tokens) {
+    switch (t.kind) {
+      case SyncDirtyTokenKind.song:
+        await db.rawUpdate(
+          'UPDATE songs SET sync_dirty = ${SyncDirty.dirty} WHERE sync_id = ?',
+          [t.syncId],
+        );
+      case SyncDirtyTokenKind.folder:
+        await db.rawUpdate(
+          'UPDATE folders SET sync_dirty = ${SyncDirty.dirty} WHERE sync_id = ?',
+          [t.syncId],
+        );
+      case SyncDirtyTokenKind.membership:
+        await db.rawUpdate(
+          'UPDATE folder_songs SET sync_dirty = ${SyncDirty.dirty} '
+          'WHERE folder_id = (SELECT id FROM folders WHERE sync_id = ?) '
+          'AND song_id = (SELECT id FROM songs WHERE sync_id = ?)',
+          [t.syncId, t.relatedSyncId],
+        );
+      case SyncDirtyTokenKind.tombstone:
+        await db.rawUpdate(
+          'UPDATE sync_tombstones SET sync_dirty = ${SyncDirty.dirty} '
+          'WHERE entity_type = ? AND sync_id = ? AND related_sync_id = ?',
+          [t.entityType, t.syncId, t.relatedSyncId],
+        );
+    }
+  }
 }
 
 /// Sets `sync_dirty = 0` on each token's row only while the row still has
@@ -256,7 +368,7 @@ Future<LocalSyncSnapshot> readLocalSyncSnapshot(DatabaseExecutor db) async {
   final memberships = <String, LocalMembershipRow>{};
   for (final r in await db.rawQuery('''
     SELECT f.sync_id AS folder_sync_id, s.sync_id AS song_sync_id,
-           fs.added_at, fs.sync_updated_at_ms, fs.sync_dirty
+           fs.added_at, fs.sync_updated_at_ms, fs.sync_dirty, fs.revision
     FROM folder_songs fs
     INNER JOIN folders f ON f.id = fs.folder_id
     INNER JOIN songs s ON s.id = fs.song_id
@@ -270,6 +382,7 @@ Future<LocalSyncSnapshot> readLocalSyncSnapshot(DatabaseExecutor db) async {
       addedAt: r['added_at'] as String,
       syncUpdatedAtMs: r['sync_updated_at_ms'] as int?,
       dirty: (r['sync_dirty'] as int?) != SyncDirty.clean,
+      revision: (r['revision'] as int?) ?? kFirstMembershipRevision,
     );
     memberships[row.key] = row;
   }
@@ -284,6 +397,7 @@ Future<LocalSyncSnapshot> readLocalSyncSnapshot(DatabaseExecutor db) async {
       relatedSyncId: (r['related_sync_id'] as String?) ?? '',
       deletedAtMs: r['deleted_at_ms'] as int,
       dirty: (r['sync_dirty'] as int?) != SyncDirty.clean,
+      revision: r['revision'] as int?,
     );
     if (!hasSyncId(t.syncId)) continue;
     switch (t.entityType) {

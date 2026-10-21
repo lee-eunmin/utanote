@@ -490,9 +490,16 @@ void main() {
         ..._legacySongColumns, 'search_aliases', 'sync_id', 'sync_updated_at_ms',
       ]));
       expect(await columnsOf(db, 'folders'), containsAll(['sync_id', 'sync_updated_at_ms']));
-      expect(await columnsOf(db, 'folder_songs'), contains('sync_updated_at_ms'));
-      expect(await columnsOf(db, 'sync_tombstones'),
-          {'entity_type', 'sync_id', 'related_sync_id', 'deleted_at_ms', 'sync_dirty'});
+      expect(await columnsOf(db, 'folder_songs'),
+          containsAll(['sync_updated_at_ms', 'revision']));
+      expect(await columnsOf(db, 'sync_tombstones'), {
+        'entity_type',
+        'sync_id',
+        'related_sync_id',
+        'deleted_at_ms',
+        'sync_dirty',
+        'revision',
+      });
       expect(await columnsOf(db, 'sync_meta'), {'key', 'value'});
 
       // Account/sync markers are reserved but empty.

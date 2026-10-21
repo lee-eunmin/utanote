@@ -8,7 +8,8 @@ rules_version = '2';
 //
 // - Only the signed-in owner (request.auth.uid == uid) can read or write.
 // - Documents are never hard-deleted; deletion is `deleted: true`.
-// - A deleted document can't be turned back into a live one.
+// - A deleted song/folder can't be turned back into a live one; a deleted
+//   membership only with a higher revision (explicit re-add, see below).
 // - Document ids must match the sync ids inside them.
 // Everything else (any other path) is denied.
 service cloud.firestore {
@@ -52,17 +53,45 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Memberships carry a revision: every user change (add, remove,
+    // re-add, ...) is a new, higher revision. The revision never goes
+    // down, and a removed membership can only become live again with a
+    // strictly higher revision (an explicit re-add). A removal may reuse
+    // the current revision (same generation: the removal wins).
     match /users/{uid}/folderSongs/{docId} {
       function idMatches() {
         return docId == request.resource.data.folderSyncId + '_'
                         + request.resource.data.songSyncId;
       }
+      function newRev() {
+        return request.resource.data.revision;
+      }
+      function wasDeleted() {
+        return resource.data.get('deleted', false) == true;
+      }
+      // Documents written before revisions existed: live 1, deleted 2.
+      function oldRev() {
+        return wasDeleted()
+            ? resource.data.get('revision', 2)
+            : resource.data.get('revision', 1);
+      }
+      function revisionOk() {
+        return newRev() is int
+            && newRev() >= oldRev()
+            && (!wasDeleted()
+                || request.resource.data.deleted == true
+                || newRev() > oldRev());
+      }
       allow read: if isOwner(uid);
-      allow create: if isOwner(uid) && idMatches() && hasDeletedFlag();
+      allow create: if isOwner(uid)
+                    && idMatches()
+                    && hasDeletedFlag()
+                    && newRev() is int
+                    && newRev() >= 1;
       allow update: if isOwner(uid)
                     && idMatches()
                     && hasDeletedFlag()
-                    && keepsDeletion();
+                    && revisionOk();
       allow delete: if false;
     }
   }

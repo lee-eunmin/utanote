@@ -487,16 +487,16 @@ void main() {
       ..seed(_uid, CloudDocCodec.putFolder(_folderY, folderData('삭제폴더'), 1000))
       ..seed(_uid, CloudDocCodec.deleteFolder(_folderY, 2000))
       ..seed(_uid, CloudDocCodec.putMembership(
-          _folderX, _a, '2024-01-02T00:00:00.000', 1000))
+          _folderX, _a, '2024-01-02T00:00:00.000', 1000, revision: 1))
       // parent song deleted
       ..seed(_uid, CloudDocCodec.putMembership(
-          _folderX, _b, '2024-01-02T00:00:00.000', 1000))
+          _folderX, _b, '2024-01-02T00:00:00.000', 1000, revision: 1))
       // parent song doesn't exist anywhere
       ..seed(_uid, CloudDocCodec.putMembership(
-          _folderX, _c, '2024-01-02T00:00:00.000', 1000))
+          _folderX, _c, '2024-01-02T00:00:00.000', 1000, revision: 1))
       // parent folder deleted
       ..seed(_uid, CloudDocCodec.putMembership(
-          _folderY, _a, '2024-01-02T00:00:00.000', 1000));
+          _folderY, _a, '2024-01-02T00:00:00.000', 1000, revision: 1));
 
     test('restores live data clean; deleted and orphaned data is not restored',
         () async {
@@ -685,9 +685,9 @@ void main() {
         ..seed(_uid, CloudDocCodec.putSong(_g, songData('G'), 1))
         ..seed(_uid, CloudDocCodec.putSong(_d, songData('D'), 1))
         ..seed(_uid, CloudDocCodec.putMembership(
-            _folderX, _g, '2024-01-01T00:00:00.000', 1))
+            _folderX, _g, '2024-01-01T00:00:00.000', 1, revision: 1))
         ..seed(_uid, CloudDocCodec.putMembership(
-            _folderX, _d, '2024-01-01T00:00:00.000', 1));
+            _folderX, _d, '2024-01-01T00:00:00.000', 1, revision: 1));
 
       await engineFor(s, cloud).run(_uid, mode: InitialSyncMode.merge);
 

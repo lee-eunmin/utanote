@@ -437,6 +437,25 @@ class _SqliteFolderRepository implements FolderRepository {
         whereArgs: [folderId, songId],
       );
       if (existing.isNotEmpty) return; // already a member: unchanged
+      final folderSyncId = await _syncIdOf(txn, _table, folderId);
+      final songSyncId = await _syncIdOf(txn, 'songs', songId);
+      // Each user change of this membership is a new revision. A re-add
+      // after a removal goes one above the removal, which is what lets it
+      // win over that (older) removal everywhere, cloud included.
+      var revision = kFirstMembershipRevision;
+      if (folderSyncId != null && songSyncId != null) {
+        final removed = await txn.query(
+          'sync_tombstones',
+          columns: ['revision'],
+          where: 'entity_type = ? AND sync_id = ? AND related_sync_id = ?',
+          whereArgs: [TombstoneEntity.folderSong, folderSyncId, songSyncId],
+        );
+        if (removed.isNotEmpty) {
+          revision = ((removed.first['revision'] as int?) ??
+                  kLegacyMembershipRemovalRevision) +
+              1;
+        }
+      }
       await txn.insert(
         _joinTable,
         {
@@ -445,13 +464,12 @@ class _SqliteFolderRepository implements FolderRepository {
           'added_at': DateTime.now().toIso8601String(),
           'sync_updated_at_ms': nowUtcMs(),
           'sync_dirty': SyncDirty.dirty,
+          'revision': revision,
         },
         conflictAlgorithm: ConflictAlgorithm.ignore,
       );
       // Re-adding a previously removed song: the membership is live again,
       // so its removal tombstone no longer applies.
-      final folderSyncId = await _syncIdOf(txn, _table, folderId);
-      final songSyncId = await _syncIdOf(txn, 'songs', songId);
       if (folderSyncId != null && songSyncId != null) {
         await txn.delete(
           'sync_tombstones',
@@ -465,22 +483,31 @@ class _SqliteFolderRepository implements FolderRepository {
   @override
   Future<void> removeSong(int folderId, int songId) async {
     await _db.transaction((txn) async {
-      final removed = await txn.delete(
+      final current = await txn.query(
+        _joinTable,
+        columns: ['revision'],
+        where: 'folder_id = ? AND song_id = ?',
+        whereArgs: [folderId, songId],
+      );
+      if (current.isEmpty) return; // not a member: unchanged
+      final liveRevision =
+          (current.first['revision'] as int?) ?? kFirstMembershipRevision;
+      await txn.delete(
         _joinTable,
         where: 'folder_id = ? AND song_id = ?',
         whereArgs: [folderId, songId],
       );
-      if (removed > 0) {
-        final folderSyncId = await _syncIdOf(txn, _table, folderId);
-        final songSyncId = await _syncIdOf(txn, 'songs', songId);
-        if (folderSyncId != null && songSyncId != null) {
-          await recordTombstone(
-            txn,
-            TombstoneEntity.folderSong,
-            folderSyncId,
-            relatedSyncId: songSyncId,
-          );
-        }
+      final folderSyncId = await _syncIdOf(txn, _table, folderId);
+      final songSyncId = await _syncIdOf(txn, 'songs', songId);
+      if (folderSyncId != null && songSyncId != null) {
+        // The removal is the next revision of this membership.
+        await recordTombstone(
+          txn,
+          TombstoneEntity.folderSong,
+          folderSyncId,
+          relatedSyncId: songSyncId,
+          revision: liveRevision + 1,
+        );
       }
     });
   }

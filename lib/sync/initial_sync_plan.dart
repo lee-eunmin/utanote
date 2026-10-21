@@ -195,42 +195,47 @@ InitialSyncPlan buildInitialSyncPlan(
             deadFolders[folderId] ??
             lt?.deletedAtMs ??
             nowMs;
-        deletionWrites.add(CloudDocCodec.deleteMembership(folderId, songId, at));
+        // Same generation as the cloud document: the deletion wins without
+        // pretending to be a newer user change.
+        deletionWrites.add(CloudDocCodec.deleteMembership(
+          folderId,
+          songId,
+          at,
+          revision: c.revision,
+        ));
       }
       if (lt != null) tokens.add(SyncDirtyToken.tombstone(lt));
       continue;
     }
 
-    if (lt != null || (c != null && c.deleted)) {
-      if (c != null && c.deleted) {
-        // Applied even with no local row: records the removal locally.
-        if (lt == null) apply.membershipRemovals.add(c);
-        if (lt != null) tokens.add(SyncDirtyToken.tombstone(lt));
+    // Revision rule (see compareMembership): higher revision wins; same
+    // revision → removal wins; both live → newer, tie → cloud.
+    if (c == null) {
+      if (l != null) {
+        _pushMembership(l, membershipWrites, tokens);
       } else {
-        deletionWrites.add(
-          CloudDocCodec.deleteMembership(folderId, songId, lt!.deletedAtMs),
-        );
-        tokens.add(SyncDirtyToken.tombstone(lt));
+        _pushMembershipRemoval(lt!, deletionWrites, tokens);
       }
       continue;
     }
-
-    final cLive = c != null && c.isLive ? c : null;
-    if (l != null && cLive != null) {
-      if (l.addedAt == cLive.addedAt) {
-        tokens.add(
-          SyncDirtyToken.membership(folderId, songId, l.syncUpdatedAtMs),
-        );
-      } else if (effectiveLocalMs(l.syncUpdatedAtMs, l.addedAt) >
-          cLive.updatedAtMs) {
-        _pushMembership(l, membershipWrites, tokens);
-      } else {
-        apply.membershipUpserts.add(cLive);
-      }
-    } else if (l != null) {
-      _pushMembership(l, membershipWrites, tokens);
-    } else if (cLive != null) {
-      apply.membershipUpserts.add(cLive);
+    if (l == null && lt == null) {
+      // Applied even when it's a removal: records it locally.
+      (c.deleted ? apply.membershipRemovals : apply.membershipUpserts).add(c);
+      continue;
+    }
+    switch (compareLocalMembership(l, lt, c)) {
+      case MembershipWinner.same:
+        tokens.add(l != null
+            ? SyncDirtyToken.membership(folderId, songId, l.syncUpdatedAtMs)
+            : SyncDirtyToken.tombstone(lt!));
+      case MembershipWinner.local:
+        if (l != null) {
+          _pushMembership(l, membershipWrites, tokens);
+        } else {
+          _pushMembershipRemoval(lt!, deletionWrites, tokens);
+        }
+      case MembershipWinner.cloud:
+        (c.deleted ? apply.membershipRemovals : apply.membershipUpserts).add(c);
     }
   }
 
@@ -282,12 +287,47 @@ void _pushMembership(
       l.songSyncId,
       l.addedAt,
       effectiveLocalMs(l.syncUpdatedAtMs, l.addedAt),
+      revision: l.revision,
     ),
   );
   tokens.add(
     SyncDirtyToken.membership(l.folderSyncId, l.songSyncId, l.syncUpdatedAtMs),
   );
 }
+
+void _pushMembershipRemoval(
+  LocalTombstone t,
+  List<CloudWrite> writes,
+  List<SyncDirtyToken> tokens,
+) {
+  writes.add(CloudDocCodec.deleteMembership(
+    t.syncId,
+    t.relatedSyncId,
+    t.deletedAtMs,
+    revision: t.membershipRevision,
+  ));
+  tokens.add(SyncDirtyToken.tombstone(t));
+}
+
+/// Compares a membership's local state (live row [l] or removal [lt]; one
+/// of them is non-null) with cloud document [c].
+MembershipWinner compareLocalMembership(
+  LocalMembershipRow? l,
+  LocalTombstone? lt,
+  CloudMembership c,
+) =>
+    compareMembership(
+      localRevision: l?.revision ?? lt!.membershipRevision,
+      localDeleted: l == null,
+      localChangedMs: l != null
+          ? effectiveLocalMs(l.syncUpdatedAtMs, l.addedAt)
+          : lt!.deletedAtMs,
+      localAddedAt: l?.addedAt,
+      cloudRevision: c.revision,
+      cloudDeleted: c.deleted,
+      cloudChangedMs: c.updatedAtMs,
+      cloudAddedAt: c.addedAt,
+    );
 
 /// Applies [plan] through the clean cloud-apply path, skipping anything
 /// whose entity key is in [skipEntityKeys] (rows this run uploaded: the
@@ -325,6 +365,7 @@ Future<void> applyLocalPlan(
       songSyncId: c.songSyncId,
       addedAt: _parseDate(c.addedAt!, c.updatedAtMs),
       updatedAtMs: c.updatedAtMs,
+      revision: c.revision,
     );
   }
   for (final c in plan.membershipRemovals) {
@@ -332,6 +373,7 @@ Future<void> applyLocalPlan(
       folderSyncId: c.folderSyncId,
       songSyncId: c.songSyncId,
       deletedAtMs: c.deletedAtMs ?? c.updatedAtMs,
+      revision: c.revision,
     );
   }
 }

@@ -12,7 +12,19 @@ import '../sync_id.dart';
 ///   columns, `sync_tombstones`, `sync_meta`. No account or network code.
 /// - 4: change tracking (Phase B-1): `sync_dirty` on `songs`, `folders`,
 ///   `folder_songs` and `sync_tombstones`. Still no account or network code.
-const int kSongbookDatabaseVersion = 4;
+/// - 5: folder-membership revisions (Phase B-4A): `folder_songs.revision`
+///   and `sync_tombstones.revision` (meaningful for `folder_song` rows only).
+const int kSongbookDatabaseVersion = 5;
+
+/// Revision a membership gets when its first state is recorded: the first
+/// add. Pre-v5 live memberships are backfilled with it.
+const int kFirstMembershipRevision = 1;
+
+/// Revision assumed for a pre-v5 membership removal (a `folder_song`
+/// tombstone without a revision): at least one add (1) followed by the
+/// removal (2). Always above [kFirstMembershipRevision], so for legacy data
+/// a removal still beats a live membership, exactly as before v5.
+const int kLegacyMembershipRemovalRevision = 2;
 
 /// Column DDL for `sync_dirty`: 1 = changed locally and not yet confirmed
 /// in the cloud, 0 = matches what the cloud has. DEFAULT 1 means every row
@@ -84,6 +96,14 @@ abstract final class SyncMetaKeys {
 
   /// Last initial-sync failure (log text only).
   static const initialSyncError = 'initial_sync_error';
+
+  // --- Phase B-4A: manual incremental sync --------------------------------
+
+  /// Highest Firestore `serverUpdatedAt` (epoch ms) pulled per collection.
+  /// Raised only after a fully successful manual sync.
+  static const pullCursorSongsMs = 'pull_cursor_songs_ms';
+  static const pullCursorFoldersMs = 'pull_cursor_folders_ms';
+  static const pullCursorFolderSongsMs = 'pull_cursor_folder_songs_ms';
 
   /// File name and time of `songbook.pre_cloud_sync_v4.backup.db`.
   static const preCloudSyncBackupFile = 'pre_cloud_sync_backup_file';
@@ -161,12 +181,31 @@ Future<void> ensureSchema(DatabaseExecutor db) async {
   await _ensureColumn(db, 'folder_songs', 'sync_dirty', kSyncDirtyColumnDdl);
   await _ensureColumn(db, 'sync_tombstones', 'sync_dirty', kSyncDirtyColumnDdl);
 
+  // v5: membership revisions. Existing live rows get the DEFAULT (1) when
+  // the column is added; nothing else in the row changes (sync_dirty
+  // included). The tombstone column is nullable because it means nothing
+  // for song/folder tombstones; legacy folder_song tombstones are filled
+  // with 2 below, only where still NULL.
+  await _ensureColumn(
+    db,
+    'folder_songs',
+    'revision',
+    'INTEGER NOT NULL DEFAULT $kFirstMembershipRevision',
+  );
+  await _ensureColumn(db, 'sync_tombstones', 'revision', 'INTEGER');
+
   await db.execute('''
     CREATE TABLE IF NOT EXISTS sync_meta (
       key TEXT PRIMARY KEY NOT NULL,
       value TEXT
     )
   ''');
+
+  await db.rawUpdate(
+    'UPDATE sync_tombstones SET revision = ? '
+    'WHERE entity_type = ? AND revision IS NULL',
+    [kLegacyMembershipRemovalRevision, TombstoneEntity.folderSong],
+  );
 
   await _backfillSyncIds(db, 'songs');
   await _backfillSyncIds(db, 'folders');
@@ -284,6 +323,7 @@ Future<void> recordTombstone(
   String relatedSyncId = '',
   int? deletedAtMs,
   int syncDirty = SyncDirty.dirty,
+  int? revision,
 }) {
   return db.insert(
     'sync_tombstones',
@@ -293,6 +333,7 @@ Future<void> recordTombstone(
       'related_sync_id': relatedSyncId,
       'deleted_at_ms': deletedAtMs ?? nowUtcMs(),
       'sync_dirty': syncDirty,
+      'revision': revision,
     },
     conflictAlgorithm: ConflictAlgorithm.replace,
   );
