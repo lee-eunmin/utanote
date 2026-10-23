@@ -15,6 +15,7 @@ import {
   getDocs,
   serverTimestamp,
   setDoc,
+  writeBatch,
 } from 'firebase/firestore';
 
 const PROJECT_ID = 'demo-utanote-rules';
@@ -246,14 +247,6 @@ describe('data integrity', () => {
     await assertFails(setDoc(ref, liveMembership(99)));
   });
 
-  test('documents are never hard-deleted', async () => {
-    await seedAlice();
-    const db = alice();
-    await assertFails(deleteDoc(songRef(db)));
-    await assertFails(deleteDoc(doc(db, 'users/alice/folders', FOLDER)));
-    await assertFails(deleteDoc(doc(db, 'users/alice/folderSongs', MEMBERSHIP)));
-  });
-
   test('document id must match the sync id inside it', async () => {
     const db = alice();
     await assertFails(setDoc(songRef(db, 'alice', SONG2), liveSong()));
@@ -270,11 +263,223 @@ describe('data integrity', () => {
     await assertFails(setDoc(songRef(db), noFlag));
   });
 
+  test('a removal marker still cannot be revived after a hard-delete is allowed', async () => {
+    // Regression guard: allowing owner deletes must not loosen updates.
+    await seedAlice();
+    const db = alice();
+    const ref = doc(db, 'users/alice/folderSongs', MEMBERSHIP);
+    await assertSucceeds(setDoc(ref, membershipRemoval(2), { merge: true }));
+    await assertFails(setDoc(ref, liveMembership(2)));
+    await assertFails(setDoc(ref, membershipRemoval(1), { merge: true }));
+    await assertSucceeds(setDoc(ref, liveMembership(3)));
+  });
+
   test('no other paths are readable or writable', async () => {
     const db = alice();
     await assertFails(setDoc(doc(db, 'users', 'alice'), { name: 'x' }));
     await assertFails(getDoc(doc(db, 'users', 'alice')));
     await assertFails(setDoc(doc(db, 'users/alice/other', 'x'), { deleted: false }));
     await assertFails(setDoc(doc(db, 'songs', SONG), liveSong()));
+  });
+});
+
+// Phase B-5: "계정 및 클라우드 데이터 삭제" hard-deletes the owner's documents.
+describe('account deletion (hard delete)', () => {
+  test('owner can hard-delete own songs, folders and memberships', async () => {
+    await seedAlice();
+    const db = alice();
+    await assertSucceeds(deleteDoc(songRef(db)));
+    await assertSucceeds(deleteDoc(doc(db, 'users/alice/folders', FOLDER)));
+    await assertSucceeds(deleteDoc(doc(db, 'users/alice/folderSongs', MEMBERSHIP)));
+    await assertSucceeds(getDocs(collection(db, 'users/alice/songs')));
+    let left = -1;
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const d = ctx.firestore();
+      const counts = await Promise.all(
+        ['songs', 'folders', 'folderSongs'].map(
+          async (c) => (await getDocs(collection(d, 'users/alice/' + c))).size,
+        ),
+      );
+      left = counts.reduce((a, b) => a + b, 0);
+    });
+    if (left !== 0) throw new Error('documents left: ' + left);
+  });
+
+  test('owner can hard-delete deletion markers and missing documents', async () => {
+    await seedAlice();
+    const db = alice();
+    await assertSucceeds(setDoc(songRef(db), deletion({ syncId: SONG }), { merge: true }));
+    await assertSucceeds(deleteDoc(songRef(db)));
+    await assertSucceeds(deleteDoc(songRef(db, 'alice', SONG2))); // never existed
+  });
+
+  test('another signed-in user cannot hard-delete alice data', async () => {
+    await seedAlice();
+    const db = bob();
+    await assertFails(deleteDoc(songRef(db)));
+    await assertFails(deleteDoc(doc(db, 'users/alice/folders', FOLDER)));
+    await assertFails(deleteDoc(doc(db, 'users/alice/folderSongs', MEMBERSHIP)));
+    await assertFails(deleteDoc(songRef(db, 'alice', SONG2)));
+  });
+
+  test('signed-out clients cannot hard-delete anything', async () => {
+    await seedAlice();
+    const db = anon();
+    await assertFails(deleteDoc(songRef(db)));
+    await assertFails(deleteDoc(doc(db, 'users/alice/folders', FOLDER)));
+    await assertFails(deleteDoc(doc(db, 'users/alice/folderSongs', MEMBERSHIP)));
+  });
+
+  test('deleting is limited to the three backup collections', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const d = ctx.firestore();
+      await setDoc(doc(d, 'users', 'alice'), { name: 'x' });
+      await setDoc(doc(d, 'users/alice/other', 'x'), { deleted: false });
+      await setDoc(doc(d, 'songs', SONG), liveSong());
+    });
+    const db = alice();
+    await assertFails(deleteDoc(doc(db, 'users', 'alice')));
+    await assertFails(deleteDoc(doc(db, 'users/alice/other', 'x')));
+    await assertFails(deleteDoc(doc(db, 'songs', SONG)));
+  });
+
+  test('alice deleting her data leaves bob data untouched', async () => {
+    await seedAlice();
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(songRef(ctx.firestore(), 'bob'), liveSong());
+    });
+    await assertSucceeds(deleteDoc(songRef(alice())));
+    await assertSucceeds(getDoc(songRef(bob(), 'bob')));
+    const bobSong = await getDoc(songRef(bob(), 'bob'));
+    if (!bobSong.exists()) throw new Error('bob song was deleted');
+  });
+});
+
+// Phase B-5.1: accountDeletionBlocks/{uid} stops a stale device of a
+// deleted account from re-creating data; owner hard deletes stay allowed.
+describe('account deletion block', () => {
+  const blockRef = (db, uid = 'alice') => doc(db, 'accountDeletionBlocks', uid);
+  const block = () => ({ deletedAt: serverTimestamp() });
+
+  async function seedBlock(uid = 'alice') {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(blockRef(ctx.firestore(), uid), { deletedAt: new Date() });
+    });
+  }
+
+  test('no block: normal create/update works', async () => {
+    await seedAlice();
+    const db = alice();
+    await assertSucceeds(setDoc(songRef(db, 'alice', SONG2), liveSong(SONG2)));
+    await assertSucceeds(setDoc(songRef(db), { ...liveSong(), title: '수정' }));
+    await assertSucceeds(
+      setDoc(doc(db, 'users/alice/folders', FOLDER), { ...liveFolder(), name: '수정' }),
+    );
+  });
+
+  test('a 400-write batch still passes the block check', async () => {
+    const db = alice();
+    const batch = writeBatch(db);
+    for (let i = 0; i < 400; i++) {
+      const id = `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
+      batch.set(songRef(db, 'alice', id), liveSong(id));
+    }
+    await assertSucceeds(batch.commit());
+  });
+
+  test('block: songs create and update are refused', async () => {
+    await seedAlice();
+    await seedBlock();
+    const db = alice();
+    await assertFails(setDoc(songRef(db, 'alice', SONG2), liveSong(SONG2)));
+    await assertFails(setDoc(songRef(db), { ...liveSong(), title: '수정' }));
+    await assertFails(setDoc(songRef(db), deletion({ syncId: SONG }), { merge: true }));
+  });
+
+  test('block: folders create and update are refused', async () => {
+    await seedAlice();
+    await seedBlock();
+    const db = alice();
+    await assertFails(setDoc(doc(db, 'users/alice/folders', SONG2), liveFolder(SONG2)));
+    await assertFails(
+      setDoc(doc(db, 'users/alice/folders', FOLDER), { ...liveFolder(), name: '수정' }),
+    );
+  });
+
+  test('block: folderSongs create and update are refused', async () => {
+    await seedBlock();
+    const db = alice();
+    const ref = doc(db, 'users/alice/folderSongs', MEMBERSHIP);
+    await assertFails(setDoc(ref, liveMembership(1))); // create
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'users/alice/folderSongs', MEMBERSHIP), liveMembership(1));
+    });
+    await assertFails(setDoc(ref, membershipRemoval(2), { merge: true })); // update
+    await assertFails(setDoc(ref, liveMembership(5))); // update
+  });
+
+  test('block: owner hard delete is still allowed', async () => {
+    await seedAlice();
+    await seedBlock();
+    const db = alice();
+    await assertSucceeds(deleteDoc(songRef(db)));
+    await assertSucceeds(deleteDoc(doc(db, 'users/alice/folders', FOLDER)));
+    await assertSucceeds(deleteDoc(doc(db, 'users/alice/folderSongs', MEMBERSHIP)));
+  });
+
+  test('block: another uid still cannot delete', async () => {
+    await seedAlice();
+    await seedBlock();
+    const db = bob();
+    await assertFails(deleteDoc(songRef(db)));
+    await assertFails(deleteDoc(doc(db, 'users/alice/folders', FOLDER)));
+  });
+
+  test('alice block does not affect bob', async () => {
+    await seedBlock('alice');
+    await assertSucceeds(setDoc(songRef(bob(), 'bob'), liveSong()));
+  });
+
+  test('owner can create own block (deletedAt = server time) and read it', async () => {
+    const db = alice();
+    await assertSucceeds(setDoc(blockRef(db), block()));
+    await assertSucceeds(getDoc(blockRef(db)));
+  });
+
+  test('block must have exactly deletedAt as server time', async () => {
+    const db = alice();
+    await assertFails(setDoc(blockRef(db), {}));
+    await assertFails(setDoc(blockRef(db), { deletedAt: new Date(0) }));
+    await assertFails(
+      setDoc(blockRef(db), { deletedAt: serverTimestamp(), email: 'alice@example.com' }),
+    );
+  });
+
+  test('another uid or a signed-out client cannot create, read or touch a block', async () => {
+    await assertFails(setDoc(blockRef(bob()), block()));
+    await assertFails(setDoc(blockRef(anon()), block()));
+    await seedBlock();
+    await assertFails(getDoc(blockRef(bob())));
+    await assertFails(getDoc(blockRef(anon())));
+    await assertFails(setDoc(blockRef(bob()), block()));
+    await assertFails(deleteDoc(blockRef(bob())));
+  });
+
+  test('an existing block cannot be overwritten, updated or deleted', async () => {
+    const db = alice();
+    await assertSucceeds(setDoc(blockRef(db), block()));
+    await assertFails(setDoc(blockRef(db), block())); // overwrite = update
+    await assertFails(setDoc(blockRef(db), { deletedAt: serverTimestamp() }, { merge: true }));
+    await assertFails(deleteDoc(blockRef(db)));
+  });
+
+  test('revision rules unchanged without a block', async () => {
+    await seedAlice();
+    const db = alice();
+    const ref = doc(db, 'users/alice/folderSongs', MEMBERSHIP);
+    await assertSucceeds(setDoc(ref, membershipRemoval(2), { merge: true }));
+    await assertFails(setDoc(ref, liveMembership(2)));
+    await assertFails(setDoc(ref, membershipRemoval(1), { merge: true }));
+    await assertSucceeds(setDoc(ref, liveMembership(3)));
   });
 });

@@ -91,13 +91,27 @@ class InitialSyncMeta {
   /// UTC epoch ms of the last fully successful sync (initial or manual).
   final int? lastSuccessfulSyncAtMs;
 
+  /// An account deletion (Phase B-5) has started and not finished: no sync
+  /// of any kind may run.
+  final bool accountDeletionPending;
+
   const InitialSyncMeta({
     this.accountUid,
     this.state,
     this.mode,
     this.uid,
     this.lastSuccessfulSyncAtMs,
+    this.accountDeletionPending = false,
   });
+}
+
+/// A sync was refused because an account deletion is pending on this
+/// device (Phase B-5).
+class SyncBlockedByAccountDeletion implements Exception {
+  const SyncBlockedByAccountDeletion();
+
+  @override
+  String toString() => 'SyncBlockedByAccountDeletion';
 }
 
 /// Per-collection pull positions: the highest server write time

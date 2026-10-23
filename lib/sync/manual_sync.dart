@@ -33,7 +33,15 @@ import 'initial_sync_plan.dart';
 import 'local_sync_store.dart';
 import 'sync_records.dart';
 
-enum ManualSyncFailureKind { accountMismatch, network, permissionDenied, other }
+enum ManualSyncFailureKind {
+  accountMismatch,
+
+  /// An account deletion is pending on this device (Phase B-5).
+  accountDeletionPending,
+  network,
+  permissionDenied,
+  other,
+}
 
 /// The sync did not complete. Local data is intact and still usable; dirty
 /// rows remain dirty; it can be retried. [detail] is for logs only.
@@ -89,6 +97,9 @@ class ManualSyncEngine {
   Future<ManualSyncResult> syncNow(String uid) async {
     try {
       final meta = await store.readMeta();
+      if (meta.accountDeletionPending) {
+        throw const SyncBlockedByAccountDeletion();
+      }
       if (meta.accountUid == null || meta.accountUid != uid) {
         throw const SyncAccountMismatch();
       }
@@ -193,6 +204,11 @@ class ManualSyncEngine {
             looked.memberships.length,
         localChanges: localChanges,
         uploadedDocuments: uploads.length,
+      );
+    } on SyncBlockedByAccountDeletion {
+      throw const ManualSyncFailure(
+        ManualSyncFailureKind.accountDeletionPending,
+        'account deletion pending',
       );
     } on SyncAccountMismatch {
       throw const ManualSyncFailure(

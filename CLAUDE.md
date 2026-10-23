@@ -160,11 +160,12 @@ CREATE TABLE folder_songs (
 
 - Firestore: `users/{uid}/songs/{songSyncId}`, `users/{uid}/folders/{folderSyncId}`,
   `users/{uid}/folderSongs/{folderSyncId}_{songSyncId}`. Format in
-  `lib/sync/cloud_sync_backend.dart` (`CloudDocCodec`). Never hard-deleted
-  (`deleted: true` + `deletedAtMs`); local integer ids never go to the cloud.
+  `lib/sync/cloud_sync_backend.dart` (`CloudDocCodec`). Sync never
+  hard-deletes (`deleted: true` + `deletedAtMs`); the only hard delete is
+  account deletion (section 11). Local integer ids never go to the cloud.
   Offline persistence is off; SQLite `sync_dirty` stays the source of truth.
-- Rules: `firestore.rules` (owner-only, no revive of deleted docs, no hard
-  delete, id must match sync id). Tests: `firestore_rules_test/` (emulator,
+- Rules: `firestore.rules` (owner-only, no revive of deleted docs, hard
+  delete by the owner only (account deletion), id must match sync id). Tests: `firestore_rules_test/` (emulator,
   `demo-` project only). Rules are deployed by the user, never automatically.
 - Pure-Dart engine `lib/sync/initial_sync_engine.dart` + planner
   `initial_sync_plan.dart`; SQLite side `lib/storage/android/sqlite_sync_store.dart`;
@@ -230,3 +231,54 @@ CREATE TABLE folder_songs (
   never synced). Signed out → "Google 계정 연결" (sign in, then the B-3
   first-connection flow in the account sheet); signed in but unbound →
   "클라우드 백업 설정" (no account picker). Never shown once bound.
+
+## 11. Account & cloud data deletion (Phase B-5, Android only)
+
+- Account sheet → "계정 및 클라우드 데이터 삭제" → confirmation dialog →
+  `AccountDeletionController` (`lib/account/account_deletion.dart`). Not the
+  same as sign-out (which never deletes anything).
+- Order: suspend all sync (`CloudSyncController.suspendForAccountDeletion`,
+  waits for a running run) → Google re-authentication, must be the same uid
+  as the signed-in user and the bound `account_uid` (cancel/failure/mismatch
+  → nothing deleted, sync resumes) → `sync_meta.account_deletion_*` marker →
+  hard-delete `users/{uid}/songs|folders|folderSongs` in ≤400 batches
+  (`CloudAccountDataEraser`; Firestore impl
+  `lib/sync/android/firestore_account_data_eraser.dart`, separate from the
+  sync backend, idempotent) → `currentUser.delete()` → one SQLite
+  transaction `finishAccountDeletion` → Google disconnect + sign-out.
+- While the marker exists (`account_deletion_state`: cloud_deleting /
+  cloud_deleted / auth_deleted) every sync path refuses to run (controller,
+  engines and store all check). Retrying resumes; `auth_deleted` is
+  finished locally on the next start.
+- Local songs/folders/memberships/tombstones/sync ids are kept. Removed:
+  `SyncMetaKeys.cloudBindingKeys` (account_uid, email hint, cursors, last
+  sync, initial sync state) and the marker; every row set `sync_dirty = 1`
+  so a later first connection (any account) uploads everything again.
+  Backup files and their meta keys are kept. No schema change.
+- After success the backup prompt is snoozed (`onAccountDeleted` in
+  `main.dart`) and not shown in the same run.
+- Public deletion-request/privacy URLs: `lib/config/account_links.dart`
+  (null until the web page exists).
+
+### 11.1 Deletion safeguards (Phase B-5.1)
+
+- Before any user document is deleted, the app creates
+  `accountDeletionBlocks/{uid}` (only field: `deletedAt` = server time; no
+  email/name/songs) and confirms it with a server read. Not confirmed →
+  nothing is deleted (if the cloud says "no block" and the local stage is
+  still `blocking`, the local marker is dropped and sync resumes). The
+  block is never removed by the app.
+- Rules: while the block exists, every create/update under `users/{uid}`
+  is refused (stale devices with a still-valid ID token can't re-create
+  data); owner hard deletes stay allowed. The block itself: owner-only
+  read/create, exactly `{deletedAt: request.time}`, no update/delete.
+- Another device still bound to the deleted uid: if the signed-in Google
+  email equals `account_email_hint` (case-insensitive) but the uid differs
+  (account re-created), `AccountLinkStatus.previousAccountSameEmail`: signed
+  in, no sync, and the account sheet offers "이 기기의 이전 클라우드 연결
+  해제" (confirmation dialog). Approving runs
+  `SqliteLocalSyncStore.releasePreviousBinding` — the same local reset as a
+  finished deletion (binding/sync meta + deletion marker removed, all rows
+  dirty, data and sync ids kept); then the user starts "클라우드 백업
+  설정" themselves. Different or unknown email → blocked and signed out as
+  before. Nothing is ever released automatically.

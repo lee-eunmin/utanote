@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../sync/cloud_sync_controller.dart';
+import 'account_deletion.dart';
 import 'auth_gateway.dart';
 
 enum AccountPhase {
@@ -35,6 +36,10 @@ class AccountController extends ChangeNotifier {
   /// attached once at startup). Null → no cloud backup entry in the UI.
   CloudSyncController? cloudSync;
 
+  /// "계정 및 클라우드 데이터 삭제" (Phase B-5, Android only; attached once
+  /// at startup). Null → no deletion entry in the UI.
+  AccountDeletionController? deletion;
+
   AccountPhase _phase = AccountPhase.initializing;
   AccountUser? _user;
   AccountLinkStatus? _linkStatus;
@@ -57,8 +62,8 @@ class AccountController extends ChangeNotifier {
   /// device's data (local data unbound, or bound to this same account).
   bool get canSync =>
       _phase == AccountPhase.signedIn &&
-      _linkStatus != null &&
-      _linkStatus != AccountLinkStatus.otherAccount;
+      (_linkStatus == AccountLinkStatus.unlinked ||
+          _linkStatus == AccountLinkStatus.sameAccount);
 
   /// Starts the backend once. Never throws.
   Future<void> start() => _starting ??= _start();
@@ -177,15 +182,24 @@ class AccountController extends ChangeNotifier {
     }
     if (gen != _generation) return;
 
-    final link = evaluateAccountLink(boundUid: boundUid, signedInUid: user.uid);
+    var link = evaluateAccountLink(boundUid: boundUid, signedInUid: user.uid);
+    if (link == AccountLinkStatus.otherAccount &&
+        await _boundToSameEmail(user)) {
+      if (gen != _generation) return;
+      // The same Google account with a new uid (deleted and re-created).
+      // Stay signed in without syncing; the user may explicitly release
+      // the old binding (Phase B-5.1). Nothing changes automatically.
+      link = AccountLinkStatus.previousAccountSameEmail;
+    }
+    if (gen != _generation) return;
     if (link == AccountLinkStatus.otherAccount) {
-      // Policy (first version): a different account may not be used on a
-      // device whose data belongs to another account. End the session;
-      // local data and the binding are untouched. State is set first so
-      // the sign-out's own "no user" event can't race it.
+      // Policy: a different account may not be used on a device whose data
+      // belongs to another account. End the session; local data and the
+      // binding are untouched. State is set first so the sign-out's own
+      // "no user" event can't race it.
       _user = null;
       _linkStatus = null;
-      _message = '이 기기의 데이터는 다른 Google 계정에 연결되어 있어요. '
+      _message = '이 기기는 다른 Google 계정의 백업에 연결되어 있어요. '
           '기존 계정으로 로그인해 주세요.';
       _set(AccountPhase.signedOut);
       try {
@@ -200,6 +214,57 @@ class AccountController extends ChangeNotifier {
     _linkStatus = link;
     _message = null;
     _set(AccountPhase.signedIn);
+  }
+
+  /// Whether the binding was recorded with the signed-in user's email
+  /// (case-insensitive). False when either email is unknown or unreadable.
+  Future<bool> _boundToSameEmail(AccountUser user) async {
+    final source = _boundAccount;
+    if (source is! BoundAccountEmailSource) return false;
+    try {
+      final hint =
+          await (source as BoundAccountEmailSource).readBoundAccountEmailHint();
+      return sameAccountEmail(hint, user.email);
+    } catch (e) {
+      debugPrint('[account] reading bound email failed: $e');
+      return false;
+    }
+  }
+
+  /// "이 기기의 이전 클라우드 연결 해제" (Phase B-5.1): only after the user
+  /// confirmed, only while signed in as the same Google email with a new
+  /// uid. Local only: removes the old binding/sync bookkeeping and marks
+  /// everything "needs upload"; songs and folders stay; nothing is
+  /// uploaded or merged. Afterwards the device is unbound, so the normal
+  /// "클라우드 백업 설정" (first connection) can be started by the user.
+  /// Returns false (changing nothing) if it doesn't apply or failed.
+  Future<bool> releasePreviousCloudBinding() async {
+    final user = _user;
+    final release = _boundAccount;
+    if (_phase != AccountPhase.signedIn ||
+        user == null ||
+        _linkStatus != AccountLinkStatus.previousAccountSameEmail ||
+        release is! PreviousBindingRelease) {
+      return false;
+    }
+    final bound = await readBoundAccountUid();
+    if (bound == null || bound == user.uid || bound == ' unknown') {
+      return false;
+    }
+    try {
+      await (release as PreviousBindingRelease)
+          .releasePreviousBinding(expectedBoundUid: bound);
+    } catch (e) {
+      debugPrint('[account] releasing previous binding failed: $e');
+      _message = '이전 클라우드 연결을 해제하지 못했어요. 이 기기의 노래와 폴더는 그대로예요.';
+      notifyListeners();
+      return false;
+    }
+    _message = null;
+    cloudSync?.onBindingReleased();
+    await deletion?.reloadPending();
+    await refreshLink();
+    return true;
   }
 
   void _set(AccountPhase phase) {

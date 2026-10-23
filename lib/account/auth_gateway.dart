@@ -60,6 +60,20 @@ abstract class BoundAccountSource {
   Future<String?> readBoundAccountUid();
 }
 
+/// Optional extra of a [BoundAccountSource]: the email recorded with the
+/// binding (`sync_meta.account_email_hint`). Read-only.
+abstract class BoundAccountEmailSource {
+  Future<String?> readBoundAccountEmailHint();
+}
+
+/// Optional: releases this device's binding to an earlier cloud account,
+/// only after the user explicitly agreed (Phase B-5.1). Local only: never
+/// deletes songs/folders, never uploads or merges.
+abstract class PreviousBindingRelease {
+  /// Throws if the device is no longer bound to [expectedBoundUid].
+  Future<void> releasePreviousBinding({required String expectedBoundUid});
+}
+
 /// How a signed-in account relates to this device's local database.
 enum AccountLinkStatus {
   /// The local database is not bound to any account yet.
@@ -70,6 +84,21 @@ enum AccountLinkStatus {
 
   /// Bound to a different account. Nothing may be merged or synced.
   otherAccount,
+
+  /// Bound to a different uid that was recorded with the SAME Google email
+  /// (e.g. the account was deleted and re-created, which gives a new uid).
+  /// Nothing syncs; the user may explicitly release the old binding on
+  /// this device and set up a new backup (Phase B-5.1).
+  previousAccountSameEmail,
+}
+
+/// Same email, ignoring case and surrounding spaces. Missing/empty never
+/// matches.
+bool sameAccountEmail(String? a, String? b) {
+  if (a == null || b == null) return false;
+  final x = a.trim().toLowerCase();
+  final y = b.trim().toLowerCase();
+  return x.isNotEmpty && x == y;
 }
 
 AccountLinkStatus evaluateAccountLink({

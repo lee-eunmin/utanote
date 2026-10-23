@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
+import '../../sync/account_data_deletion.dart';
 import '../../sync/local_sync_store.dart';
 import '../../sync/sync_records.dart';
 import '../cloud_apply.dart';
@@ -15,7 +16,7 @@ import 'sqlite_schema.dart';
 /// are passed on verbatim, never re-formatted), and writes only through
 /// the clean cloud-apply path, the guarded dirty-clear below, and
 /// `sync_meta`. No schema change.
-class SqliteLocalSyncStore implements LocalSyncStore {
+class SqliteLocalSyncStore implements LocalSyncStore, AccountDeletionStore {
   final Database _db;
   final String _databasePath;
 
@@ -38,6 +39,8 @@ class SqliteLocalSyncStore implements LocalSyncStore {
       uid: await read(SyncMetaKeys.initialSyncUid),
       lastSuccessfulSyncAtMs:
           int.tryParse(await read(SyncMetaKeys.lastSuccessfulSyncAtMs) ?? ''),
+      accountDeletionPending:
+          await read(SyncMetaKeys.accountDeletionState) != null,
     );
   }
 
@@ -80,6 +83,7 @@ class SqliteLocalSyncStore implements LocalSyncStore {
   @override
   Future<void> markInitialSyncStarted(String uid, String mode) async {
     await _db.transaction((txn) async {
+      await _requireNoAccountDeletion(txn);
       await writeSyncMeta(txn, SyncMetaKeys.initialSyncState,
           InitialSyncState.inProgress);
       await writeSyncMeta(txn, SyncMetaKeys.initialSyncMode, mode);
@@ -123,6 +127,7 @@ class SqliteLocalSyncStore implements LocalSyncStore {
     ) apply,
   }) async {
     await _db.transaction((txn) async {
+      await _requireNoAccountDeletion(txn);
       final existing = await readSyncMeta(txn, SyncMetaKeys.accountUid);
       if (existing != null && existing.isNotEmpty && existing != uid) {
         throw StateError('database is already bound to another account');
@@ -233,7 +238,198 @@ class SqliteLocalSyncStore implements LocalSyncStore {
     });
   }
 
+  // --- Phase B-5: account deletion -------------------------------------------
+
+  @override
+  Future<PendingAccountDeletion?> readPendingAccountDeletion() =>
+      _readPendingDeletion(_db);
+
+  @override
+  Future<void> markAccountDeletionStarted(String uid) async {
+    if (uid.isEmpty) throw ArgumentError('empty uid');
+    await _db.transaction((txn) async {
+      final bound = await readSyncMeta(txn, SyncMetaKeys.accountUid);
+      if (bound != null && bound.isNotEmpty && bound != uid) {
+        throw StateError('database is bound to another account');
+      }
+      final pending = await _readPendingDeletion(txn);
+      if (pending != null) {
+        if (pending.uid != uid) {
+          throw StateError('another account deletion is pending');
+        }
+        return; // resuming: keep the stage reached so far
+      }
+      await writeSyncMeta(txn, SyncMetaKeys.accountDeletionUid, uid);
+      await writeSyncMeta(
+        txn,
+        SyncMetaKeys.accountDeletionState,
+        AccountDeletionStage.blocking.storedName,
+      );
+      await writeSyncMeta(
+        txn,
+        SyncMetaKeys.accountDeletionStartedAtMs,
+        nowUtcMs().toString(),
+      );
+      await writeSyncMeta(txn, SyncMetaKeys.accountDeletionDeletedDocs, '0');
+    });
+  }
+
+  @override
+  Future<void> recordAccountDeletionProgress(
+    String uid, {
+    AccountDeletionStage? stage,
+    int? deletedDocs,
+  }) async {
+    await _db.transaction((txn) async {
+      final pending = await _readPendingDeletion(txn);
+      if (pending == null || pending.uid != uid) return;
+      if (stage != null && stage.index > pending.stage.index) {
+        await writeSyncMeta(
+          txn,
+          SyncMetaKeys.accountDeletionState,
+          stage.storedName,
+        );
+      }
+      if (deletedDocs != null && deletedDocs > pending.deletedDocs) {
+        await writeSyncMeta(
+          txn,
+          SyncMetaKeys.accountDeletionDeletedDocs,
+          deletedDocs.toString(),
+        );
+      }
+    });
+  }
+
+  @override
+  Future<void> cancelAccountDeletion(String uid) async {
+    await _db.transaction((txn) async {
+      final pending = await _readPendingDeletion(txn);
+      if (pending == null ||
+          pending.uid != uid ||
+          pending.stage != AccountDeletionStage.blocking) {
+        throw StateError('deletion can no longer be cancelled');
+      }
+      await _deleteMetaKeys(txn, SyncMetaKeys.accountDeletionKeys);
+    });
+  }
+
+  @override
+  Future<void> finishAccountDeletion(String uid) async {
+    await _db.transaction((txn) async {
+      final pending = await _readPendingDeletion(txn);
+      if (pending == null || pending.uid != uid) {
+        throw StateError('no pending deletion for this account');
+      }
+      final bound = await readSyncMeta(txn, SyncMetaKeys.accountUid);
+      if (bound != null && bound.isNotEmpty && bound != uid) {
+        throw StateError('database is bound to another account');
+      }
+      await _resetCloudBindingIn(txn);
+    });
+  }
+
+  // --- Phase B-5.1: release a stale binding (same Google account) ----------
+
+  /// The email recorded with the binding (`account_email_hint`), or null.
+  Future<String?> readBoundAccountEmailHint() async {
+    final v = await readSyncMeta(_db, SyncMetaKeys.accountEmailHint);
+    return (v == null || v.isEmpty) ? null : v;
+  }
+
+  /// Explicit, user-approved release of this device's binding to an
+  /// earlier cloud account (e.g. the same Google account deleted and
+  /// re-created, which gets a new uid). Local only, ONE transaction: only
+  /// while the device is still bound to [expectedBoundUid]; removes the
+  /// binding/sync bookkeeping and any deletion marker, marks every row
+  /// "needs upload". Songs, folders, memberships, tombstones and sync ids
+  /// are kept; nothing is uploaded or merged.
+  Future<void> releasePreviousBinding({
+    required String expectedBoundUid,
+  }) async {
+    await _db.transaction((txn) async {
+      final bound = await readSyncMeta(txn, SyncMetaKeys.accountUid);
+      if (bound == null || bound.isEmpty || bound != expectedBoundUid) {
+        throw StateError('binding changed');
+      }
+      await _resetCloudBindingIn(txn);
+    });
+  }
+
+  /// Removes the binding/sync bookkeeping and the deletion marker and marks
+  /// every row "needs upload" (for whatever account comes next). Only the
+  /// flag changes: data, sync ids and timestamps stay as they are. Backup
+  /// files and their meta keys are kept.
+  static Future<void> _resetCloudBindingIn(DatabaseExecutor txn) async {
+    await _deleteMetaKeys(txn, [
+      ...SyncMetaKeys.cloudBindingKeys,
+      ...SyncMetaKeys.accountDeletionKeys,
+    ]);
+    for (final table in const [
+      'songs',
+      'folders',
+      'folder_songs',
+      'sync_tombstones',
+    ]) {
+      await txn.rawUpdate(
+        'UPDATE $table SET sync_dirty = ${SyncDirty.dirty} '
+        'WHERE sync_dirty IS NOT ${SyncDirty.dirty}',
+      );
+    }
+  }
+
+  static Future<void> _deleteMetaKeys(
+    DatabaseExecutor txn,
+    List<String> keys,
+  ) =>
+      txn.delete(
+        'sync_meta',
+        where: 'key IN (${List.filled(keys.length, '?').join(',')})',
+        whereArgs: keys,
+      );
+
+  static Future<PendingAccountDeletion?> _readPendingDeletion(
+    DatabaseExecutor db,
+  ) async {
+    final stage = AccountDeletionStage.parse(
+      await readSyncMeta(db, SyncMetaKeys.accountDeletionState),
+    );
+    final uid = await readSyncMeta(db, SyncMetaKeys.accountDeletionUid);
+    if (stage == null) {
+      // An unknown/garbled state still blocks sync (see
+      // _requireNoAccountDeletion), reported as the earliest stage.
+      final raw = await readSyncMeta(db, SyncMetaKeys.accountDeletionState);
+      if (raw == null || raw.isEmpty || uid == null || uid.isEmpty) {
+        return null;
+      }
+      return PendingAccountDeletion(
+        uid: uid,
+        stage: AccountDeletionStage.cloudDeleting,
+      ); // not "blocking": an unknown state is never cancellable
+    }
+    if (uid == null || uid.isEmpty) return null;
+    return PendingAccountDeletion(
+      uid: uid,
+      stage: stage,
+      deletedDocs:
+          int.tryParse(
+            await readSyncMeta(db, SyncMetaKeys.accountDeletionDeletedDocs) ??
+                '',
+          ) ??
+          0,
+    );
+  }
+
+  /// Every sync entry point refuses to run while an account deletion is
+  /// pending, so nothing can be re-uploaded into a cloud being deleted.
+  static Future<void> _requireNoAccountDeletion(DatabaseExecutor txn) async {
+    final state = await readSyncMeta(txn, SyncMetaKeys.accountDeletionState);
+    if (state != null && state.isNotEmpty) {
+      throw const SyncBlockedByAccountDeletion();
+    }
+  }
+
   static Future<void> _requireBound(DatabaseExecutor txn, String uid) async {
+    await _requireNoAccountDeletion(txn);
     final bound = await readSyncMeta(txn, SyncMetaKeys.accountUid);
     if (bound == null || bound.isEmpty || bound != uid) {
       throw const SyncAccountMismatch();

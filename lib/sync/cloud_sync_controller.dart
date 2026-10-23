@@ -116,6 +116,17 @@ class CloudSyncController extends ChangeNotifier {
   int _backoffUntilMs = 0;
   int _syncRuns = 0;
 
+  /// The account the two-way sync result ([manualStatus], [manualMessage])
+  /// and the failure backoff belong to. A result never outlives its
+  /// account/binding: it is cleared when another uid signs in, when a new
+  /// first connection completes, and when a binding is released or the
+  /// account deleted. Null → nothing recorded.
+  String? _statusUid;
+
+  // --- account deletion (Phase B-5) ---
+  bool _suspended = false;
+  final List<Completer<void>> _idleWaiters = [];
+
   /// Number of two-way sync runs started (manual + automatic), for tests.
   @visibleForTesting
   int get syncRuns => _syncRuns;
@@ -141,6 +152,10 @@ class CloudSyncController extends ChangeNotifier {
 
   bool get busy => _busy;
 
+  /// Every sync (first connection, "지금 동기화", automatic) is off while
+  /// an account deletion runs or is unfinished (Phase B-5).
+  bool get suspended => _suspended;
+
   /// Bumped whenever local songs/folders may have changed (restore/merge),
   /// so screens know to reload.
   int get dataVersion => _dataVersion;
@@ -155,6 +170,15 @@ class CloudSyncController extends ChangeNotifier {
   int? get lastSyncAtMs => _lastSyncAtMs;
 
   void _onAccountChanged() {
+    // A sync result of another account must not be shown for this one
+    // (e.g. old uid denied → account re-created with a new uid).
+    final current = _account.phase == AccountPhase.signedIn
+        ? _account.user?.uid
+        : null;
+    if (_statusUid != null && current != null && current != _statusUid) {
+      _clearTwoWayStatus();
+      notifyListeners();
+    }
     if (_busy) return; // re-evaluated when the run ends
     final user = _account.user;
     final signedIn = _account.phase == AccountPhase.signedIn && user != null;
@@ -201,7 +225,7 @@ class CloudSyncController extends ChangeNotifier {
   /// "클라우드 백업 설정" / "다시 시도". Ignored while a run is going.
   Future<void> startSetup() async {
     final user = _account.user;
-    if (_busy || user == null) return;
+    if (_busy || _suspended || user == null) return;
     if (_account.phase != AccountPhase.signedIn ||
         _account.linkStatus != AccountLinkStatus.unlinked) {
       return;
@@ -228,7 +252,7 @@ class CloudSyncController extends ChangeNotifier {
     } catch (e) {
       _fail(_messageFor(e));
     } finally {
-      _busy = false;
+      _setIdle();
       _onAccountChanged();
     }
   }
@@ -236,7 +260,10 @@ class CloudSyncController extends ChangeNotifier {
   /// "합치기". Only valid while a decision is pending.
   Future<void> confirmMerge() async {
     final user = _account.user;
-    if (_busy || user == null || _phase != CloudSyncPhase.needsMergeDecision) {
+    if (_busy ||
+        _suspended ||
+        user == null ||
+        _phase != CloudSyncPhase.needsMergeDecision) {
       return;
     }
     _busy = true;
@@ -245,7 +272,7 @@ class CloudSyncController extends ChangeNotifier {
     } catch (e) {
       _fail(_messageFor(e));
     } finally {
-      _busy = false;
+      _setIdle();
       _onAccountChanged();
     }
   }
@@ -267,6 +294,9 @@ class CloudSyncController extends ChangeNotifier {
     }
     _pending = null;
     _dataVersion++;
+    // A new binding starts with a clean sync state: nothing from an
+    // earlier account/binding carries over.
+    _clearTwoWayStatus();
     await _account.refreshLink();
     _set(CloudSyncPhase.connected);
     await _loadLastSync();
@@ -275,6 +305,7 @@ class CloudSyncController extends ChangeNotifier {
   bool get _canTwoWaySync {
     final user = _account.user;
     return _manual != null &&
+        !_suspended &&
         user != null &&
         _phase == CloudSyncPhase.connected &&
         _account.phase == AccountPhase.signedIn &&
@@ -354,6 +385,7 @@ class CloudSyncController extends ChangeNotifier {
     if (engine == null || user == null) return;
     _busy = true;
     _syncRuns++;
+    _statusUid = user.uid;
     _lastAttemptMs = (_auto?.now ?? AutoSyncConfig._utcNowMs)();
     _manualMessage = null;
     _manualStatus = ManualSyncStatus.running;
@@ -379,12 +411,20 @@ class CloudSyncController extends ChangeNotifier {
             (wait > auto.backoffMax ? auto.backoffMax : wait).inMilliseconds;
       }
       _manualStatus = ManualSyncStatus.failed;
-      _manualMessage = e is ManualSyncFailure &&
-              e.kind == ManualSyncFailureKind.accountMismatch
-          ? '이 기기는 다른 계정에 연결되어 있어 동기화할 수 없어요.'
-          : '동기화하지 못했어요. 이 기기의 데이터는 그대로예요.';
+      _manualMessage = switch (e) {
+        ManualSyncFailure(kind: ManualSyncFailureKind.accountMismatch) =>
+          '이 기기는 다른 계정에 연결되어 있어 동기화할 수 없어요.',
+        ManualSyncFailure(
+          kind: ManualSyncFailureKind.accountDeletionPending,
+        ) =>
+          '계정 삭제가 끝나지 않아 동기화할 수 없어요.',
+        _ => '동기화하지 못했어요. 이 기기의 데이터는 그대로예요.',
+      };
     } finally {
-      _busy = false;
+      _setIdle();
+      // The account changed while this run was in flight: its result
+      // belongs to the old account and must not be shown.
+      if (_account.user?.uid != user.uid) _clearTwoWayStatus();
       notifyListeners();
     }
     // Requests that arrived during the run: one more run, only after a
@@ -397,6 +437,87 @@ class CloudSyncController extends ChangeNotifier {
       } else {
         unawaited(_runTwoWay(manual: true));
       }
+    }
+  }
+
+  // --- Phase B-5: account deletion -------------------------------------------
+
+  /// Stops every kind of sync for an account deletion: cancels the
+  /// debounce/backoff timers and any queued follow-up, refuses new runs
+  /// (automatic, "지금 동기화", first connection), and completes once a run
+  /// already in progress has finished, so no cloud write can happen after
+  /// this returns.
+  Future<void> suspendForAccountDeletion() async {
+    _suspended = true;
+    _debounceTimer?.cancel();
+    _debounceTimer = null;
+    _backoffTimer?.cancel();
+    _backoffTimer = null;
+    _pendingSync = false;
+    notifyListeners();
+    if (!_busy) return;
+    final idle = Completer<void>();
+    _idleWaiters.add(idle);
+    await idle.future;
+  }
+
+  /// Allows sync again: after a deletion was cancelled before anything was
+  /// deleted, or after it finished (the device is then unbound and signed
+  /// out, so nothing runs until the user connects again).
+  void resumeAfterAccountDeletion() {
+    if (!_suspended) return;
+    _suspended = false;
+    _pendingSync = false;
+    _consecutiveFailures = 0;
+    _backoffUntilMs = 0;
+    _manualStatus = ManualSyncStatus.idle;
+    _manualMessage = null;
+    _onAccountChanged();
+    notifyListeners();
+  }
+
+  /// The device's data no longer belongs to any cloud account (account
+  /// deleted): forget the shown sync state.
+  void resetAfterAccountDeletion() {
+    _clearTwoWayStatus();
+    _lastSyncAtMs = null;
+    _lastAttemptMs = null;
+    _uid = null;
+    _pending = null;
+    _message = null;
+    _dataVersion++;
+    notifyListeners();
+  }
+
+  /// "이 기기의 이전 클라우드 연결 해제" (Phase B-5.1) completed: the old
+  /// binding's sync result and backoff are gone with it.
+  void onBindingReleased() {
+    _clearTwoWayStatus();
+    _lastSyncAtMs = null;
+    notifyListeners();
+  }
+
+  /// Forgets the two-way sync result, failure backoff and queued follow-up
+  /// of the current/previous account. Not a way to hide errors: only called
+  /// when that account/binding is no longer the one in use.
+  void _clearTwoWayStatus() {
+    _manualStatus = ManualSyncStatus.idle;
+    _manualMessage = null;
+    _consecutiveFailures = 0;
+    _backoffUntilMs = 0;
+    _backoffTimer?.cancel();
+    _backoffTimer = null;
+    _pendingSync = false;
+    _lastAttemptMs = null;
+    _statusUid = null;
+  }
+
+  void _setIdle() {
+    _busy = false;
+    final waiters = List.of(_idleWaiters);
+    _idleWaiters.clear();
+    for (final w in waiters) {
+      if (!w.isCompleted) w.complete();
     }
   }
 
@@ -449,6 +570,7 @@ class CloudSyncController extends ChangeNotifier {
   void dispose() {
     _debounceTimer?.cancel();
     _backoffTimer?.cancel();
+    _setIdle();
     _account.removeListener(_onAccountChanged);
     super.dispose();
   }

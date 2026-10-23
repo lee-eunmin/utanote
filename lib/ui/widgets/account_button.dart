@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../../account/account_controller.dart';
+import '../../account/account_deletion.dart';
+import '../../account/auth_gateway.dart';
+import '../../config/account_links.dart';
 import '../../sync/cloud_sync_controller.dart';
 import '../../sync/sync_records.dart';
 import '../../theme/app_theme.dart';
@@ -74,7 +77,11 @@ class AccountSheet extends StatelessWidget {
         ),
         padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
         child: ListenableBuilder(
-          listenable: Listenable.merge([account, ?account.cloudSync]),
+          listenable: Listenable.merge([
+            account,
+            ?account.cloudSync,
+            ?account.deletion,
+          ]),
           builder: (context, _) => Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -125,8 +132,29 @@ class AccountSheet extends StatelessWidget {
       case AccountPhase.signedOut:
       case AccountPhase.signingIn:
         final busy = account.phase == AccountPhase.signingIn;
+        final deletion = account.deletion;
         return [
           ?notice,
+          if (deletion != null && deletion.completedThisLaunch)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(4, 0, 4, 12),
+              child: Text(
+                '계정과 클라우드 백업을 삭제했어요. 이 기기의 노래와 폴더는 그대로예요. '
+                '원하면 다시 Google 계정을 연결해 새 백업을 만들 수 있어요.',
+                key: Key('accountDeletedNotice'),
+                style: TextStyle(fontSize: 13, color: AppColors.textPrimary),
+              ),
+            )
+          else if (deletion?.pending != null)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(4, 0, 4, 12),
+              child: Text(
+                '계정 삭제가 끝나지 않았어요. 삭제하던 Google 계정으로 다시 로그인한 뒤 '
+                '"계정 삭제 계속하기"를 눌러 주세요. 그때까지 동기화는 멈춰 있어요.',
+                key: Key('accountDeletionPendingNotice'),
+                style: TextStyle(fontSize: 13, color: AppColors.danger),
+              ),
+            ),
           const _Note(
             'Google 계정으로 로그인할 수 있어요. 클라우드 백업은 준비 중이며, '
             '이 기기의 노래와 폴더는 그대로 유지됩니다.',
@@ -173,7 +201,13 @@ class AccountSheet extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
-          if (account.cloudSync case final cloud?) ...[
+          if (account.linkStatus ==
+              AccountLinkStatus.previousAccountSameEmail) ...[
+            ?notice,
+            _PreviousBindingSection(account: account),
+            const SizedBox(height: 12),
+            const _Note('로그아웃해도 이 기기의 노래와 폴더는 삭제되지 않습니다.'),
+          ] else if (account.cloudSync case final cloud?) ...[
             _CloudBackupSection(cloud: cloud),
             const SizedBox(height: 12),
             const _Note('로그아웃해도 이 기기의 노래와 폴더는 삭제되지 않습니다.'),
@@ -187,11 +221,21 @@ class AccountSheet extends StatelessWidget {
             width: double.infinity,
             child: TextButton.icon(
               key: const Key('signOutButton'),
-              onPressed: account.signOut,
+              onPressed: (account.deletion?.busy ?? false)
+                  ? null
+                  : account.signOut,
               icon: const Icon(Icons.logout_rounded, size: 18),
               label: const Text('로그아웃'),
             ),
           ),
+          if (account.deletion case final deletion?
+              when account.linkStatus !=
+                  AccountLinkStatus.previousAccountSameEmail) ...[
+            const SizedBox(height: 8),
+            const Divider(color: AppColors.hairline, height: 1),
+            const SizedBox(height: 8),
+            _AccountDeletionSection(account: account, deletion: deletion),
+          ],
         ];
     }
   }
@@ -237,7 +281,9 @@ class _CloudBackupSection extends StatelessWidget {
             const SizedBox(height: 10),
             FilledButton.icon(
               key: const Key('cloudSetupButton'),
-              onPressed: cloud.busy ? null : cloud.startSetup,
+              onPressed: cloud.busy || cloud.suspended
+                  ? null
+                  : cloud.startSetup,
               icon: const Icon(Icons.cloud_upload_outlined, size: 18),
               label: const Text('클라우드 백업 설정'),
             ),
@@ -353,7 +399,7 @@ class _CloudBackupSection extends StatelessWidget {
             const SizedBox(height: 10),
             FilledButton.icon(
               key: const Key('cloudSyncNowButton'),
-              onPressed: cloud.busy ? null : cloud.syncNow,
+              onPressed: cloud.busy || cloud.suspended ? null : cloud.syncNow,
               icon: running
                   ? const SizedBox(
                       width: 16,
@@ -386,7 +432,9 @@ class _CloudBackupSection extends StatelessWidget {
             const SizedBox(height: 10),
             FilledButton.icon(
               key: const Key('cloudRetryButton'),
-              onPressed: cloud.busy ? null : cloud.startSetup,
+              onPressed: cloud.busy || cloud.suspended
+                  ? null
+                  : cloud.startSetup,
               icon: const Icon(Icons.refresh_rounded, size: 18),
               label: const Text('다시 시도'),
             ),
@@ -397,6 +445,253 @@ class _CloudBackupSection extends StatelessWidget {
 
   static String _summary(SyncDataSummary? s) =>
       s == null ? '-' : '노래 ${s.songs}곡 · 폴더 ${s.folders}개';
+}
+
+/// Signed in with the same Google email as the device's earlier cloud
+/// account, but a new uid (Phase B-5.1). Nothing syncs; the user may
+/// explicitly release the old binding on this device.
+class _PreviousBindingSection extends StatelessWidget {
+  final AccountController account;
+
+  const _PreviousBindingSection({required this.account});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      key: const Key('previousBindingSection'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 4),
+          child: Text(
+            '이 기기는 이전 UtaNote 클라우드 계정에 연결되어 있어요. 같은 Google '
+            '계정으로 새 클라우드 백업을 다시 설정할 수 있어요. 그때까지 동기화는 '
+            '하지 않아요.',
+            style: TextStyle(
+              fontSize: 13,
+              height: 1.45,
+              color: AppColors.textPrimary,
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        FilledButton.icon(
+          key: const Key('releasePreviousBindingButton'),
+          onPressed: () async {
+            final ok = await confirmReleasePreviousBinding(context);
+            if (ok == true) await account.releasePreviousCloudBinding();
+          },
+          icon: const Icon(Icons.link_off_rounded, size: 18),
+          label: const Text('이 기기의 이전 클라우드 연결 해제'),
+        ),
+      ],
+    );
+  }
+}
+
+/// True only when the user chose to release the old binding.
+Future<bool?> confirmReleasePreviousBinding(BuildContext context) {
+  return showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      key: const Key('releasePreviousBindingDialog'),
+      backgroundColor: AppColors.surfaceHigh,
+      title: const Text(
+        '이 기기는 이전 UtaNote 클라우드 계정에 연결되어 있어요.',
+        style: AppTextStyles.sheetTitle,
+      ),
+      content: const Text(
+        '같은 Google 계정으로 새 클라우드 백업을 다시 설정하시겠어요?\n\n'
+        '연결을 해제해도 이 기기의 노래와 폴더는 삭제되지 않아요. 해제한 뒤 '
+        '"클라우드 백업 설정"을 누르면 새 백업을 만들 수 있어요.',
+        style: TextStyle(
+          fontSize: 14,
+          height: 1.45,
+          color: AppColors.textPrimary,
+        ),
+      ),
+      actions: [
+        TextButton(
+          key: const Key('releasePreviousBindingCancel'),
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('취소'),
+        ),
+        FilledButton(
+          key: const Key('releasePreviousBindingConfirm'),
+          onPressed: () => Navigator.of(context).pop(true),
+          child: const Text('이 기기의 이전 클라우드 연결 해제'),
+        ),
+      ],
+    ),
+  );
+}
+
+/// "계정 및 클라우드 데이터 삭제" (Phase B-5): entry, progress, failure and
+/// resume. The deletion itself runs in [AccountDeletionController], so it
+/// keeps going if the sheet is closed.
+class _AccountDeletionSection extends StatelessWidget {
+  final AccountController account;
+  final AccountDeletionController deletion;
+
+  const _AccountDeletionSection({
+    required this.account,
+    required this.deletion,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (deletion.busy) {
+      final text = switch (deletion.status) {
+        AccountDeletionStatus.reauthenticating => '본인 확인 중…',
+        AccountDeletionStatus.blockingCloud => '삭제를 준비하는 중…',
+        AccountDeletionStatus.deletingCloud =>
+          '클라우드 백업 삭제 중… (${deletion.deletedThisRun}개) 앱을 닫지 말아 주세요.',
+        AccountDeletionStatus.deletingAccount => '계정 삭제 중…',
+        _ => '마무리하는 중…',
+      };
+      return Row(
+        key: const Key('accountDeletionProgress'),
+        children: [
+          const SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: _Note(text)),
+        ],
+      );
+    }
+
+    final message = deletion.message;
+    final pending = deletion.pending;
+    final resumable = pending != null && pending.uid == account.user?.uid;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (message != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
+            child: Text(
+              message,
+              key: const Key('accountDeletionMessage'),
+              style: const TextStyle(fontSize: 13, color: AppColors.danger),
+            ),
+          )
+        else if (resumable)
+          const Padding(
+            padding: EdgeInsets.fromLTRB(4, 0, 4, 8),
+            child: Text(
+              '계정 삭제가 끝나지 않았어요. 계속하면 남은 클라우드 백업과 계정을 '
+              '삭제해요. 그때까지 동기화는 멈춰 있어요.',
+              key: Key('accountDeletionPendingNotice'),
+              style: TextStyle(fontSize: 13, color: AppColors.danger),
+            ),
+          ),
+        TextButton.icon(
+          key: Key(
+            resumable ? 'accountDeletionResumeButton' : 'accountDeleteButton',
+          ),
+          style: TextButton.styleFrom(foregroundColor: AppColors.danger),
+          onPressed: () async {
+            if (resumable) {
+              // Already confirmed when it started; only the rest is left.
+              await deletion.deleteAccount();
+              return;
+            }
+            final ok = await confirmAccountDeletion(context);
+            if (ok == true) await deletion.deleteAccount();
+          },
+          icon: const Icon(Icons.delete_forever_rounded, size: 18),
+          label: Text(resumable ? '계정 삭제 계속하기' : '계정 및 클라우드 데이터 삭제'),
+        ),
+      ],
+    );
+  }
+}
+
+/// "계정과 클라우드 백업을 삭제할까요?" — true only for the delete button.
+Future<bool?> confirmAccountDeletion(BuildContext context) {
+  const points = [
+    'UtaNote에 연결된 Google 로그인 계정 정보가 삭제돼요.',
+    '클라우드에 백업된 노래와 폴더 데이터가 삭제돼요.',
+    '이 기기에 저장된 노래와 폴더는 그대로 유지돼요.',
+    '삭제된 클라우드 백업은 복구할 수 없어요.',
+    '나중에 원하면 다시 Google 계정을 연결해서 새 백업을 만들 수 있어요.',
+  ];
+  return showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      key: const Key('accountDeleteDialog'),
+      backgroundColor: AppColors.surfaceHigh,
+      title: const Text('계정과 클라우드 백업을 삭제할까요?', style: AppTextStyles.sheetTitle),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (final p in points)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '•  ',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                    Expanded(
+                      child: Text(
+                        p,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          height: 1.45,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            const SizedBox(height: 4),
+            const Text(
+              '계속하면 본인 확인을 위해 Google 계정을 한 번 더 선택해요.',
+              style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+            ),
+            if (kAccountDeletionRequestUrl case final url?) ...[
+              const SizedBox(height: 8),
+              SelectableText(
+                '앱 밖에서 삭제 요청: $url',
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          key: const Key('accountDeleteCancel'),
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('취소'),
+        ),
+        FilledButton(
+          key: const Key('accountDeleteConfirm'),
+          style: FilledButton.styleFrom(
+            backgroundColor: AppColors.danger,
+            foregroundColor: Colors.white,
+          ),
+          onPressed: () => Navigator.of(context).pop(true),
+          child: const Text('계정 및 백업 삭제'),
+        ),
+      ],
+    ),
+  );
 }
 
 /// Local-time display of a UTC epoch-ms sync time, e.g. "10월 22일 15:04".

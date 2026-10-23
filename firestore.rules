@@ -7,10 +7,15 @@ rules_version = '2';
 //         users/{uid}/folderSongs/{folderSyncId}_{songSyncId}
 //
 // - Only the signed-in owner (request.auth.uid == uid) can read or write.
-// - Documents are never hard-deleted; deletion is `deleted: true`.
+// - Sync never hard-deletes; a deletion is `deleted: true`. The only hard
+//   delete is account deletion (Phase B-5), allowed for the owner only.
 // - A deleted song/folder can't be turned back into a live one; a deleted
 //   membership only with a higher revision (explicit re-add, see below).
 // - Document ids must match the sync ids inside them.
+// - Account deletion (Phase B-5.1): accountDeletionBlocks/{uid} is created
+//   first. While it exists, nothing under users/{uid} can be created or
+//   updated (a stale device of the deleted account can't re-create data);
+//   hard deletes by the owner stay allowed so the deletion can finish.
 // Everything else (any other path) is denied.
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -23,6 +28,22 @@ service cloud.firestore {
       return request.resource.data.deleted is bool;
     }
 
+    // The account is being/was deleted: no new or changed user data.
+    function notBlocked(uid) {
+      return !exists(/databases/$(database)/documents/accountDeletionBlocks/$(uid));
+    }
+
+    // Minimal security record of a deleted account: id = uid, only
+    // "deletedAt" (server time). Created once by the owner; never changed
+    // or removed by a client; readable only by the owner.
+    match /accountDeletionBlocks/{uid} {
+      allow read: if isOwner(uid);
+      allow create: if isOwner(uid)
+                    && request.resource.data.keys().hasOnly(['deletedAt'])
+                    && request.resource.data.deletedAt == request.time;
+      allow update, delete: if false;
+    }
+
     // An update may not revive a deleted document.
     function keepsDeletion() {
       return resource.data.get('deleted', false) != true
@@ -32,25 +53,35 @@ service cloud.firestore {
     match /users/{uid}/songs/{songId} {
       allow read: if isOwner(uid);
       allow create: if isOwner(uid)
+                    && notBlocked(uid)
                     && request.resource.data.syncId == songId
                     && hasDeletedFlag();
       allow update: if isOwner(uid)
+                    && notBlocked(uid)
                     && request.resource.data.syncId == songId
                     && hasDeletedFlag()
                     && keepsDeletion();
-      allow delete: if false;
+      // Hard delete: only "계정 및 클라우드 데이터 삭제" (Phase B-5) uses it;
+      // normal sync never deletes and keeps using `deleted: true`. Allowed
+      // even while blocked, so the deletion can finish.
+      allow delete: if isOwner(uid);
     }
 
     match /users/{uid}/folders/{folderId} {
       allow read: if isOwner(uid);
       allow create: if isOwner(uid)
+                    && notBlocked(uid)
                     && request.resource.data.syncId == folderId
                     && hasDeletedFlag();
       allow update: if isOwner(uid)
+                    && notBlocked(uid)
                     && request.resource.data.syncId == folderId
                     && hasDeletedFlag()
                     && keepsDeletion();
-      allow delete: if false;
+      // Hard delete: only "계정 및 클라우드 데이터 삭제" (Phase B-5) uses it;
+      // normal sync never deletes and keeps using `deleted: true`. Allowed
+      // even while blocked, so the deletion can finish.
+      allow delete: if isOwner(uid);
     }
 
     // Memberships carry a revision: every user change (add, remove,
@@ -84,15 +115,20 @@ service cloud.firestore {
       }
       allow read: if isOwner(uid);
       allow create: if isOwner(uid)
+                    && notBlocked(uid)
                     && idMatches()
                     && hasDeletedFlag()
                     && newRev() is int
                     && newRev() >= 1;
       allow update: if isOwner(uid)
+                    && notBlocked(uid)
                     && idMatches()
                     && hasDeletedFlag()
                     && revisionOk();
-      allow delete: if false;
+      // Hard delete: only "계정 및 클라우드 데이터 삭제" (Phase B-5) uses it;
+      // normal sync never deletes and keeps using `deleted: true`. Allowed
+      // even while blocked, so the deletion can finish.
+      allow delete: if isOwner(uid);
     }
   }
 }

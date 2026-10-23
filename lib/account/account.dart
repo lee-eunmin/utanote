@@ -8,4 +8,5 @@ library;
 
 export 'account_stub.dart' if (dart.library.io) 'android/firebase_auth_gateway.dart';
 export 'account_controller.dart';
+export 'account_deletion.dart';
 export 'auth_gateway.dart';

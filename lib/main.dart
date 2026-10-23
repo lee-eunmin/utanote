@@ -20,7 +20,15 @@ Future<void> main() async {
   // Android only: starts Firebase sign-in in the background (not awaited).
   // If Firebase isn't configured or fails, sign-in is just unavailable;
   // the app and its local data are unaffected. Null on Web.
-  final account = startAccount(storage);
+  final backupPromptPrefs = SharedPreferencesBackupPromptPrefs();
+  final account = startAccount(
+    storage,
+    // The user just deleted their account on purpose: don't offer a new
+    // backup right away (same snooze as "나중에").
+    onAccountDeleted: () => backupPromptPrefs.setSnoozedAtMs(
+      DateTime.now().toUtc().millisecondsSinceEpoch,
+    ),
+  );
   final cloudSync = account?.cloudSync;
   runApp(
     UtaNoteApp(
@@ -35,8 +43,7 @@ Future<void> main() async {
       songListAdSourceFactory: songListAdSourceFactory(),
       adsConsent: adsConsent,
       account: account,
-      backupPromptPrefs:
-          cloudSync == null ? null : SharedPreferencesBackupPromptPrefs(),
+      backupPromptPrefs: cloudSync == null ? null : backupPromptPrefs,
     ),
   );
 }

@@ -1,7 +1,9 @@
 import 'dart:async';
 
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:utanote/account/account_deletion.dart';
 import 'package:utanote/account/auth_gateway.dart';
+import 'package:utanote/sync/account_data_deletion.dart';
 import 'package:utanote/sync/cloud_sync_backend.dart';
 import 'package:utanote/sync/sync_records.dart';
 
@@ -40,6 +42,9 @@ class FakeCloudBackend implements CloudSyncBackend {
   int clockStepMs = 1000;
 
   int fetchChangedCount = 0;
+
+  /// `accountDeletionBlocks/{uid}` documents that exist (Phase B-5.1).
+  final Set<String> blockedUids = {};
   int fetchByIdsCount = 0;
 
   /// The since values of the last fetchChanged call.
@@ -162,6 +167,13 @@ class FakeCloudBackend implements CloudSyncBackend {
     }
     if (beforeCommit != null) await beforeCommit!(commitCount);
     if (failOnCommit == commitCount) throw commitError;
+    // Phase B-5.1 rule: no create/update under a uid with a deletion block.
+    if (blockedUids.contains(uid)) {
+      throw const CloudSyncBackendException(
+        CloudSyncErrorKind.permissionDenied,
+        'fake rules: account deletion block',
+      );
+    }
     // Rules check for the whole batch first: atomic like Firestore.
     for (final w in writes) {
       final existing = col(uid, w.collection)[w.docId];
@@ -289,3 +301,146 @@ FolderData folderData(String name) => FolderData(
       createdAt: '2024-01-01T00:00:00.000',
       updatedAt: '2024-01-01T00:00:00.000',
     );
+
+// ---------------------------------------------------------------------------
+// Phase B-5: account deletion fakes
+// ---------------------------------------------------------------------------
+
+/// Hard-deletes from a [FakeCloudBackend], like the Firestore eraser: only
+/// the given uid's three collections, at most [batchSize] per batch.
+class FakeCloudEraser implements CloudAccountDataEraser {
+  final FakeCloudBackend cloud;
+  final int batchSize;
+
+  FakeCloudEraser(this.cloud, {this.batchSize = 400});
+
+  /// 1-based index (over all calls) of the batch that fails before
+  /// deleting anything.
+  int? failOnBatch;
+  Object error = const CloudSyncBackendException(
+    CloudSyncErrorKind.network,
+    'fake offline',
+  );
+
+  int batchCount = 0;
+  int calls = 0;
+  final List<int> batchSizes = [];
+  final List<String> uidsTouched = [];
+
+  /// Runs before each batch (e.g. to observe ordering).
+  Future<void> Function(int batchIndex)? beforeBatch;
+
+  /// Ordered log: 'block' (confirmed) and 'batch' entries.
+  final List<String> events = [];
+
+  /// Creating the block fails (nothing created) when set.
+  Object? blockError;
+
+  /// The block IS created, but the call still fails (e.g. timeout after
+  /// the server applied it).
+  bool blockCreatedThenError = false;
+
+  /// Checking whether the block exists fails when set.
+  Object? blockCheckError;
+  int blockCalls = 0;
+
+  @override
+  Future<void> ensureDeletionBlock(String uid) async {
+    blockCalls++;
+    if (blockError != null) throw blockError!;
+    cloud.blockedUids.add(uid);
+    if (blockCreatedThenError) {
+      throw const CloudSyncBackendException(
+        CloudSyncErrorKind.network,
+        'fake timeout after create',
+      );
+    }
+    events.add('block');
+  }
+
+  @override
+  Future<bool> deletionBlockExists(String uid) async {
+    if (blockCheckError != null) throw blockCheckError!;
+    return cloud.blockedUids.contains(uid);
+  }
+
+  @override
+  Future<int> deleteAllUserData(
+    String uid, {
+    void Function(int deletedSoFar)? onBatchCommitted,
+  }) async {
+    calls++;
+    uidsTouched.add(uid);
+    var deleted = 0;
+    for (final name in const [
+      CloudCollections.folderSongs,
+      CloudCollections.folders,
+      CloudCollections.songs,
+    ]) {
+      while (true) {
+        final col = cloud.users[uid]?[name];
+        if (col == null || col.isEmpty) break;
+        batchCount++;
+        await beforeBatch?.call(batchCount);
+        if (failOnBatch == batchCount) throw error;
+        final ids = col.keys.take(batchSize).toList();
+        for (final id in ids) {
+          col.remove(id);
+        }
+        batchSizes.add(ids.length);
+        events.add('batch');
+        deleted += ids.length;
+        onBatchCommitted?.call(deleted);
+      }
+    }
+    return deleted;
+  }
+}
+
+/// Firebase-like re-authentication and user deletion.
+class FakeDeletionAuth implements AccountDeletionAuth {
+  @override
+  String? currentUid;
+
+  /// What re-authentication returns, or throws when [reauthError] is set.
+  AccountUser reauthUser;
+  Object? reauthError;
+
+  /// If set, re-authentication waits for it.
+  Completer<void>? reauthGate;
+
+  Object? deleteError;
+
+  /// Called after a successful delete (e.g. Firebase's "no user" event).
+  void Function()? onDeleted;
+
+  int reauthCalls = 0;
+  int deleteCalls = 0;
+  int googleEnded = 0;
+
+  /// Cloud documents left for the uid when deleteCurrentUser was called.
+  int? cloudDocsAtAuthDelete;
+  int Function()? cloudDocCount;
+
+  FakeDeletionAuth(this.reauthUser) : currentUid = reauthUser.uid;
+
+  @override
+  Future<AccountUser> reauthenticate() async {
+    reauthCalls++;
+    if (reauthGate != null) await reauthGate!.future;
+    if (reauthError != null) throw reauthError!;
+    return reauthUser;
+  }
+
+  @override
+  Future<void> deleteCurrentUser() async {
+    deleteCalls++;
+    cloudDocsAtAuthDelete = cloudDocCount?.call();
+    if (deleteError != null) throw deleteError!;
+    currentUid = null;
+    onDeleted?.call();
+  }
+
+  @override
+  Future<void> endGoogleSession() async => googleEnded++;
+}

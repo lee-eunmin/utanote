@@ -109,6 +109,42 @@ abstract final class SyncMetaKeys {
   static const preCloudSyncBackupFile = 'pre_cloud_sync_backup_file';
   static const preCloudSyncBackupCreatedAtMs =
       'pre_cloud_sync_backup_created_at_ms';
+
+  // --- Phase B-5: account deletion (key/value rows only, no schema change) --
+
+  /// Stage of a started, unfinished account deletion
+  /// (`AccountDeletionStage.storedName`). While present, every sync is
+  /// refused. Removed when the deletion finishes.
+  static const accountDeletionState = 'account_deletion_state';
+
+  /// The account being deleted.
+  static const accountDeletionUid = 'account_deletion_uid';
+  static const accountDeletionStartedAtMs = 'account_deletion_started_at_ms';
+
+  /// Cloud documents deleted so far (all attempts).
+  static const accountDeletionDeletedDocs = 'account_deletion_deleted_docs';
+
+  /// Every key describing a cloud binding / sync position. Removed by a
+  /// finished account deletion (backup-file keys are kept: the files stay).
+  static const cloudBindingKeys = [
+    accountUid,
+    accountEmailHint,
+    lastSuccessfulSyncAtMs,
+    initialSyncState,
+    initialSyncMode,
+    initialSyncUid,
+    initialSyncError,
+    pullCursorSongsMs,
+    pullCursorFoldersMs,
+    pullCursorFolderSongsMs,
+  ];
+
+  static const accountDeletionKeys = [
+    accountDeletionState,
+    accountDeletionUid,
+    accountDeletionStartedAtMs,
+    accountDeletionDeletedDocs,
+  ];
 }
 
 /// Brings any database — fresh, legacy `user_version` 0, or v2 — to the

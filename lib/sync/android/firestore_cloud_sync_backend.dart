@@ -5,6 +5,30 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../cloud_sync_backend.dart';
 import '../sync_records.dart';
 
+bool _configured = false;
+
+/// The Firestore instance used for sync and account deletion, with offline
+/// persistence turned off (set once, before the first Firestore call).
+FirebaseFirestore syncFirestore() {
+  final db = FirebaseFirestore.instance;
+  if (!_configured) {
+    db.settings = const Settings(persistenceEnabled: false);
+    _configured = true;
+  }
+  return db;
+}
+
+/// Maps a Firestore error to the sync layer's error kinds.
+CloudSyncBackendException mapFirestoreError(FirebaseException e) {
+  final kind = switch (e.code) {
+    'unavailable' || 'deadline-exceeded' => CloudSyncErrorKind.network,
+    'permission-denied' ||
+    'unauthenticated' => CloudSyncErrorKind.permissionDenied,
+    _ => CloudSyncErrorKind.other,
+  };
+  return CloudSyncBackendException(kind, 'firestore ${e.code}');
+}
+
 /// Firestore implementation of [CloudSyncBackend]. Android only (imported
 /// solely from `account/android/`, so it never reaches the Web build).
 ///
@@ -18,17 +42,7 @@ class FirestoreCloudSyncBackend implements CloudSyncBackend {
   /// Firestore's limit for `whereIn`.
   static const _idChunk = 30;
 
-  static bool _configured = false;
-
-  FirebaseFirestore get _firestore {
-    final db = FirebaseFirestore.instance;
-    if (!_configured) {
-      // Must be set before the first Firestore call.
-      db.settings = const Settings(persistenceEnabled: false);
-      _configured = true;
-    }
-    return db;
-  }
+  FirebaseFirestore get _firestore => syncFirestore();
 
   CollectionReference<Map<String, dynamic>> _col(String uid, String name) =>
       _firestore.collection('users').doc(uid).collection(name);
@@ -181,13 +195,6 @@ class FirestoreCloudSyncBackend implements CloudSyncBackend {
     );
   }
 
-  static CloudSyncBackendException _map(FirebaseException e) {
-    final kind = switch (e.code) {
-      'unavailable' || 'deadline-exceeded' => CloudSyncErrorKind.network,
-      'permission-denied' || 'unauthenticated' =>
-        CloudSyncErrorKind.permissionDenied,
-      _ => CloudSyncErrorKind.other,
-    };
-    return CloudSyncBackendException(kind, 'firestore ${e.code}');
-  }
+  static CloudSyncBackendException _map(FirebaseException e) =>
+      mapFirestoreError(e);
 }

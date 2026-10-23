@@ -128,6 +128,7 @@ class InitialSyncEngine {
   /// Throws [InitialSyncFailure] if the cloud can't be read.
   Future<InitialSyncAssessment> assess(String uid) async {
     final meta = await store.readMeta();
+    _requireNoAccountDeletion(meta);
     final bound = _bound(meta, uid);
     if (bound != null) return bound;
     final cloud = await _fetch(uid);
@@ -145,6 +146,7 @@ class InitialSyncEngine {
     String? email,
   }) async {
     final meta = await store.readMeta();
+    _requireNoAccountDeletion(meta);
     final bound = _bound(meta, uid);
     if (bound != null) {
       if (bound.kind == InitialSyncAssessmentKind.alreadyLinked) {
@@ -223,6 +225,16 @@ class InitialSyncEngine {
         // Best effort; the in-progress mark already allows a retry.
       }
       throw failure;
+    }
+  }
+
+  /// No first connection while an account deletion is pending (Phase B-5).
+  static void _requireNoAccountDeletion(InitialSyncMeta meta) {
+    if (meta.accountDeletionPending) {
+      throw const InitialSyncFailure(
+        InitialSyncFailureKind.other,
+        'account deletion pending',
+      );
     }
   }
 

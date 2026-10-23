@@ -49,7 +49,8 @@ enum BackupPromptAction {
 ///   binding is the final word: once bound, never again;
 /// - signed in → that account is unlinked (not another account's device);
 /// - at least one song is saved locally (brand-new users aren't nagged);
-/// - not snoozed within [kBackupPromptSnooze].
+/// - not snoozed within [kBackupPromptSnooze];
+/// - no account deletion finished in this run or is still unfinished.
 /// Reads only; never writes anything.
 Future<BackupPromptAction?> evaluateBackupPrompt({
   required AccountController account,
@@ -58,6 +59,13 @@ Future<BackupPromptAction?> evaluateBackupPrompt({
   required int nowMs,
 }) async {
   if (account.cloudSync == null) return null;
+  // Account deletion (Phase B-5): never right after the user deleted their
+  // account, and never while a deletion is unfinished.
+  final deletion = account.deletion;
+  if (deletion != null &&
+      (deletion.completedThisLaunch || deletion.pending != null)) {
+    return null;
+  }
   final phase = account.phase;
   if (phase != AccountPhase.signedOut && phase != AccountPhase.signedIn) {
     return null;
