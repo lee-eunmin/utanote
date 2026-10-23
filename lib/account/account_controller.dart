@@ -119,6 +119,20 @@ class AccountController extends ChangeNotifier {
     }
   }
 
+  /// The account this device's data is bound to (`sync_meta.account_uid`),
+  /// or null if unbound. Read-only. If it can't be read, returns a
+  /// non-null placeholder, so callers treat the device as bound and never
+  /// offer to connect it.
+  Future<String?> readBoundAccountUid() async {
+    try {
+      final uid = await _boundAccount.readBoundAccountUid();
+      return (uid == null || uid.isEmpty) ? null : uid;
+    } catch (e) {
+      debugPrint('[account] reading bound account failed: $e');
+      return '\u0000unknown';
+    }
+  }
+
   /// Re-reads the device's account binding for the signed-in user, e.g.
   /// after the first cloud connection wrote `account_uid`. Read-only.
   Future<void> refreshLink() async {

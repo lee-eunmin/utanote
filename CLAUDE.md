@@ -126,9 +126,10 @@ CREATE TABLE folder_songs (
   configure` overwrites it; the google-services Gradle plugin is applied
   only when `android/app/google-services.json` exists. Without config the
   app runs normally with sign-in hidden.
-- Phase B-3 (Android only): user-initiated **first cloud connection**
-  only — see section 8. No automatic/periodic/realtime/background sync,
-  no multi-account switching, no Web/iOS sync, no Supabase.
+- Cloud (Android only): user-initiated first connection (section 8),
+  manual + automatic two-way sync for bound devices (sections 9–10). No
+  periodic/realtime listener/background (app-closed) sync, no multi-account
+  switching, no Web/iOS sync, no Supabase.
 
 ## 7. Cloud-sync readiness (schema v3–v4, Android only)
 
@@ -206,3 +207,26 @@ CREATE TABLE folder_songs (
   down; a removed membership becomes live only with a higher revision.
 - Screens reload through `AppShell` when `CloudSyncController.dataVersion`
   changes.
+
+## 10. Automatic sync & backup prompt (Phase B-4B, Android only)
+
+- `CloudSyncController` + `AutoSyncConfig` (set in
+  `account/android/firebase_auth_gateway.dart`): automatic two-way sync,
+  only while the device is bound to the signed-in account (never for an
+  unbound device — that still uses "클라우드 백업 설정" only). Triggers:
+  restored session on start; foreground resume (`AppLifecycleListener` in
+  `AppShell`, ≥1 min since the last attempt); 5 s after the last user
+  write (`ObservedLocalStorage` in `main.dart` wraps the UI storage; reads
+  and cloud-apply writes never trigger). One run at a time; a data change
+  or "지금 동기화" during a run → exactly one follow-up run. Failures are
+  quiet (status in the account sheet only), dirty rows stay, backoff
+  1→2→4…→15 min for automatic triggers; "지금 동기화" ignores throttle and
+  backoff.
+- Backup prompt (`lib/ui/backup_prompt.dart`, `BackupPromptGate` in
+  `AppShell`): once per launch, after the first frame settles and sign-in
+  has started, only if `account_uid` is absent, ≥1 song exists, sign-in is
+  usable and not snoozed. "나중에"/closing → snoozed 7 days via
+  SharedPreferences key `backup_prompt_snoozed_at_ms` (local UI setting,
+  never synced). Signed out → "Google 계정 연결" (sign in, then the B-3
+  first-connection flow in the account sheet); signed in but unbound →
+  "클라우드 백업 설정" (no account picker). Never shown once bound.

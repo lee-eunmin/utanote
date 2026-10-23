@@ -519,7 +519,8 @@ void main() {
       return (account, sync);
     }
 
-    test('sync now: success, duplicate taps ignored, data change reported',
+    test('sync now: a tap during a run never runs concurrently, it runs '
+        'once more afterwards; data change reported',
         () async {
       final (a, b, cloud, _, _) = await twoDevices();
       await addSong(b, 'B 곡');
@@ -533,9 +534,15 @@ void main() {
       final second = controller.syncNow();
       expect(controller.manualStatus, ManualSyncStatus.running);
       expect(controller.busy, isTrue);
+      expect(controller.syncRuns, 1); // the second tap did not start a run
       cloud.fetchGate!.complete();
       await Future.wait([first, second]);
-      expect(cloud.fetchChangedCount, 2); // b's sync + one for a's two taps
+      while (controller.busy) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      // b's sync + a's run + exactly one follow-up for the second tap.
+      expect(cloud.fetchChangedCount, 3);
+      expect(controller.syncRuns, 2);
       expect(controller.manualStatus, ManualSyncStatus.succeeded);
       expect(controller.dataVersion, version + 1);
       expect(controller.lastSyncAtMs, isNotNull);

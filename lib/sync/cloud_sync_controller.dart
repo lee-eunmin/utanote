@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import '../account/account_controller.dart';
@@ -29,27 +31,94 @@ enum CloudSyncPhase {
   failed,
 }
 
-/// State of a manual "지금 동기화" run while [CloudSyncPhase.connected].
+/// State of a two-way sync run (manual or automatic) while
+/// [CloudSyncPhase.connected].
 enum ManualSyncStatus { idle, running, succeeded, failed }
 
-/// UI state of the first cloud connection and of manual syncs. Only runs
-/// when the user asks: no automatic sync of any kind.
+/// Why an automatic sync was requested (Phase B-4B).
+enum AutoSyncTrigger {
+  /// The signed-in session was restored and the device is bound.
+  appStart,
+
+  /// The app came back to the foreground.
+  appResume,
+
+  /// A user write to songs/folders/memberships (after the debounce).
+  dataChanged,
+
+  /// A request that arrived while a sync was running.
+  followUp,
+}
+
+/// Timing of automatic sync. Production values by default.
+class AutoSyncConfig {
+  /// Quiet time after the last user write before syncing.
+  final Duration debounce;
+
+  /// Minimum time between automatic start/resume syncs (from the last
+  /// attempt, successful or not).
+  final Duration resumeThrottle;
+
+  /// After a failed sync, automatic syncs wait this long, doubling per
+  /// consecutive failure up to [backoffMax]. "지금 동기화" ignores it.
+  final Duration backoffBase;
+  final Duration backoffMax;
+
+  /// UTC epoch ms.
+  final int Function() now;
+
+  const AutoSyncConfig({
+    this.debounce = const Duration(seconds: 5),
+    this.resumeThrottle = const Duration(minutes: 1),
+    this.backoffBase = const Duration(minutes: 1),
+    this.backoffMax = const Duration(minutes: 15),
+    this.now = _utcNowMs,
+  });
+
+  static int _utcNowMs() => DateTime.now().toUtc().millisecondsSinceEpoch;
+}
+
+/// UI state of the first cloud connection and of two-way syncs.
+///
+/// The first connection ("클라우드 백업 설정") only ever runs when the user
+/// asks. Two-way sync runs on "지금 동기화" and — when [AutoSyncConfig] is
+/// given (Phase B-4B) — automatically, but only for a device bound to the
+/// signed-in account: at start, on return to the foreground (throttled),
+/// and a few seconds after user data changes (debounced). One sync at a
+/// time; requests during a run are folded into one follow-up run.
 class CloudSyncController extends ChangeNotifier {
   final InitialSyncEngine _engine;
   final AccountController _account;
 
-  /// Manual two-way sync for a bound device (Phase B-4A). Null → no
-  /// "지금 동기화" button.
+  /// Two-way sync for a bound device (Phase B-4A). Null → no
+  /// "지금 동기화" button and no automatic sync.
   final ManualSyncEngine? _manual;
+
+  /// Null → no automatic sync (manual only).
+  final AutoSyncConfig? _auto;
 
   CloudSyncController({
     required this._engine,
     required this._account,
     this._manual,
-  }) {
+    AutoSyncConfig? autoSync,
+  }) : _auto = autoSync {
     _account.addListener(_onAccountChanged);
     _onAccountChanged();
   }
+
+  // --- automatic sync state ---
+  Timer? _debounceTimer;
+  Timer? _backoffTimer;
+  bool _pendingSync = false;
+  int? _lastAttemptMs;
+  int _consecutiveFailures = 0;
+  int _backoffUntilMs = 0;
+  int _syncRuns = 0;
+
+  /// Number of two-way sync runs started (manual + automatic), for tests.
+  @visibleForTesting
+  int get syncRuns => _syncRuns;
 
   CloudSyncPhase _phase = CloudSyncPhase.unavailable;
   String? _message;
@@ -103,7 +172,13 @@ class CloudSyncController extends ChangeNotifier {
       _message = null;
       final entering = _phase != CloudSyncPhase.connected;
       _set(CloudSyncPhase.connected);
-      if (entering) _loadLastSync();
+      if (entering) {
+        _loadLastSync();
+        // Session restored (or signed back in) on a bound device. A first
+        // connection that just finished sets the phase itself, so it never
+        // gets here and doesn't sync twice.
+        requestAutoSync(AutoSyncTrigger.appStart);
+      }
       return;
     }
     if (link != AccountLinkStatus.unlinked) {
@@ -197,26 +272,112 @@ class CloudSyncController extends ChangeNotifier {
     await _loadLastSync();
   }
 
-  /// "지금 동기화" / "다시 시도". Only while connected; ignored while any
-  /// run is going.
-  Future<void> syncNow() async {
-    final manual = _manual;
+  bool get _canTwoWaySync {
     final user = _account.user;
-    if (manual == null || _busy || user == null) return;
-    if (_phase != CloudSyncPhase.connected ||
-        _account.linkStatus != AccountLinkStatus.sameAccount) {
+    return _manual != null &&
+        user != null &&
+        _phase == CloudSyncPhase.connected &&
+        _account.phase == AccountPhase.signedIn &&
+        _account.linkStatus == AccountLinkStatus.sameAccount;
+  }
+
+  /// "지금 동기화" / "다시 시도". Only while connected. Not limited by the
+  /// automatic throttle or backoff; if a sync is already running, it runs
+  /// once more right after it.
+  Future<void> syncNow() async {
+    if (!_canTwoWaySync) return;
+    if (_busy) {
+      _pendingSync = true;
       return;
     }
+    await _runTwoWay(manual: true);
+  }
+
+  /// The app returned to the foreground.
+  void onAppResumed() => requestAutoSync(AutoSyncTrigger.appResume);
+
+  /// A user write to songs/folders/memberships completed. Syncs after
+  /// [AutoSyncConfig.debounce] of quiet; only for a bound device.
+  void onLocalDataChanged() {
+    final auto = _auto;
+    if (auto == null || !_canTwoWaySync) return;
+    _debounceTimer?.cancel();
+    _debounceTimer = Timer(auto.debounce, () {
+      _debounceTimer = null;
+      requestAutoSync(AutoSyncTrigger.dataChanged);
+    });
+  }
+
+  /// Asks for an automatic sync. Ignored unless automatic sync is on and
+  /// this device is bound to the signed-in account. Never runs two syncs
+  /// at once: during a run it only sets a single "run once more" flag.
+  void requestAutoSync(AutoSyncTrigger trigger) {
+    final auto = _auto;
+    if (auto == null || !_canTwoWaySync) return;
+    if (_busy) {
+      // A start/resume request is already covered by the run in progress;
+      // a data change made during it needs one more run afterwards.
+      if (trigger == AutoSyncTrigger.dataChanged ||
+          trigger == AutoSyncTrigger.followUp) {
+        _pendingSync = true;
+      }
+      return;
+    }
+    final now = auto.now();
+    if (trigger != AutoSyncTrigger.followUp && now < _backoffUntilMs) {
+      // Failing recently: wait. A data change is retried once when the
+      // backoff ends (it is still dirty locally either way).
+      if (trigger == AutoSyncTrigger.dataChanged) {
+        _backoffTimer?.cancel();
+        _backoffTimer = Timer(
+          Duration(milliseconds: _backoffUntilMs - now),
+          () {
+            _backoffTimer = null;
+            requestAutoSync(AutoSyncTrigger.dataChanged);
+          },
+        );
+      }
+      return;
+    }
+    if ((trigger == AutoSyncTrigger.appStart ||
+            trigger == AutoSyncTrigger.appResume) &&
+        _lastAttemptMs != null &&
+        now - _lastAttemptMs! < auto.resumeThrottle.inMilliseconds) {
+      return;
+    }
+    unawaited(_runTwoWay(manual: false));
+  }
+
+  Future<void> _runTwoWay({required bool manual}) async {
+    final engine = _manual;
+    final user = _account.user;
+    if (engine == null || user == null) return;
     _busy = true;
+    _syncRuns++;
+    _lastAttemptMs = (_auto?.now ?? AutoSyncConfig._utcNowMs)();
     _manualMessage = null;
     _manualStatus = ManualSyncStatus.running;
     notifyListeners();
+    var ok = false;
     try {
-      final result = await manual.syncNow(user.uid);
+      final result = await engine.syncNow(user.uid);
+      ok = true;
+      _consecutiveFailures = 0;
+      _backoffUntilMs = 0;
       if (result.localChanges > 0) _dataVersion++;
-      _lastSyncAtMs = await manual.lastSuccessfulSyncAtMs();
-      _manualStatus = ManualSyncStatus.succeeded;
+      _lastSyncAtMs = await engine.lastSuccessfulSyncAtMs();
+      // Automatic successes stay quiet: only the last sync time changes.
+      _manualStatus =
+          manual ? ManualSyncStatus.succeeded : ManualSyncStatus.idle;
     } catch (e) {
+      _consecutiveFailures++;
+      final auto = _auto;
+      if (auto != null) {
+        final factor = 1 << (_consecutiveFailures - 1).clamp(0, 16);
+        final wait = auto.backoffBase * factor;
+        _backoffUntilMs = auto.now() +
+            (wait > auto.backoffMax ? auto.backoffMax : wait).inMilliseconds;
+      }
       _manualStatus = ManualSyncStatus.failed;
       _manualMessage = e is ManualSyncFailure &&
               e.kind == ManualSyncFailureKind.accountMismatch
@@ -225,6 +386,17 @@ class CloudSyncController extends ChangeNotifier {
     } finally {
       _busy = false;
       notifyListeners();
+    }
+    // Requests that arrived during the run: one more run, only after a
+    // success (after a failure, the next trigger or "지금 동기화" retries).
+    final followUp = _pendingSync;
+    _pendingSync = false;
+    if (followUp && ok && _canTwoWaySync) {
+      if (_auto != null) {
+        requestAutoSync(AutoSyncTrigger.followUp);
+      } else {
+        unawaited(_runTwoWay(manual: true));
+      }
     }
   }
 
@@ -275,6 +447,8 @@ class CloudSyncController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _debounceTimer?.cancel();
+    _backoffTimer?.cancel();
     _account.removeListener(_onAccountChanged);
     super.dispose();
   }

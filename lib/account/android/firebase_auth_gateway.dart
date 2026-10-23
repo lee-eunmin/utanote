@@ -33,13 +33,16 @@ AccountController? startAccount(LocalStorage storage) {
     gateway: FirebaseAuthGateway(),
     boundAccount: _SqliteBoundAccount(storage),
   );
-  // User-initiated cloud work only: the first connection and "지금 동기화"
-  // (no automatic sync). Firestore is touched only when the user starts
-  // one while signed in, i.e. after Firebase has been initialized.
+  // The first connection only runs when the user asks; two-way sync runs
+  // on "지금 동기화" and automatically once the device is bound. Firestore
+  // is only touched while signed in, i.e. after Firebase is initialized.
   final backend = FirestoreCloudSyncBackend();
   controller.cloudSync = CloudSyncController(
     engine: InitialSyncEngine(store: storage.syncStore, backend: backend),
     manual: ManualSyncEngine(store: storage.syncStore, backend: backend),
+    // Phase B-4B: automatic sync for a bound device (start, foreground,
+    // 5 s after user edits). Never for an unbound device.
+    autoSync: const AutoSyncConfig(),
     account: controller,
   );
   _controller = controller;

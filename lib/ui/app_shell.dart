@@ -5,6 +5,7 @@ import '../ads/ads_consent_controller.dart';
 import '../ads/list_ad_source.dart';
 import '../storage/local_storage.dart';
 import '../sync/cloud_sync_controller.dart';
+import 'backup_prompt.dart';
 import 'folders_screen.dart';
 import 'song_list_screen.dart';
 import 'tj_search_screen.dart';
@@ -18,12 +19,24 @@ class AppShell extends StatefulWidget {
   final AdsConsentController? adsConsent;
   final AccountController? account;
 
+  /// Where the backup prompt remembers "나중에". Null → no prompt.
+  final BackupPromptPrefs? backupPromptPrefs;
+
+  /// Settle time before the backup prompt is considered.
+  final Duration backupPromptDelay;
+
+  /// Clock for the prompt's snooze (UTC ms). Null → real time.
+  final int Function()? backupPromptNow;
+
   const AppShell({
     super.key,
     required this.storage,
     this.songListAdSourceFactory,
     this.adsConsent,
     this.account,
+    this.backupPromptPrefs,
+    this.backupPromptDelay = const Duration(milliseconds: 1500),
+    this.backupPromptNow,
   });
 
   @override
@@ -43,10 +56,16 @@ class _AppShellState extends State<AppShell> {
   CloudSyncController? _cloudSync;
   int _seenDataVersion = 0;
 
+  /// Foreground return → automatic sync (throttled in the controller).
+  late final AppLifecycleListener _lifecycle = AppLifecycleListener(
+    onResume: () => widget.account?.cloudSync?.onAppResumed(),
+  );
+
   @override
   void initState() {
     super.initState();
     _attachCloudSync();
+    _lifecycle; // start listening
   }
 
   @override
@@ -60,6 +79,7 @@ class _AppShellState extends State<AppShell> {
 
   @override
   void dispose() {
+    _lifecycle.dispose();
     _cloudSync?.removeListener(_onCloudSync);
     super.dispose();
   }
@@ -111,12 +131,21 @@ class _AppShellState extends State<AppShell> {
       FoldersScreen(key: _foldersKey, storage: widget.storage),
       TjSearchScreen(key: _tjSearchKey, storage: widget.storage),
     ];
-    return Scaffold(
-      body: IndexedStack(index: _index, children: screens),
-      bottomNavigationBar: AppBottomNav(
-        currentIndex: _index,
-        onTap: _onTabTap,
+    return BackupPromptGate(
+      account: widget.account,
+      storage: widget.storage,
+      prefs: widget.backupPromptPrefs,
+      delay: widget.backupPromptDelay,
+      now: widget.backupPromptNow ?? _utcNowMs,
+      child: Scaffold(
+        body: IndexedStack(index: _index, children: screens),
+        bottomNavigationBar: AppBottomNav(
+          currentIndex: _index,
+          onTap: _onTabTap,
+        ),
       ),
     );
   }
 }
+
+int _utcNowMs() => DateTime.now().toUtc().millisecondsSinceEpoch;
