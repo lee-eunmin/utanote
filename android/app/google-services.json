@@ -30,6 +30,14 @@
           }
         },
         {
+          "client_id": "1021818890974-m7r9s5pb4at8kk0sv06trssm45p333is.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.eungman.UTANOTE",
+            "certificate_hash": "14c206c2a89c052a309ceef0839c58091a1af5f2"
+          }
+        },
+        {
           "client_id": "1021818890974-1ni0mvv5qij098p2mpdcs4ihtc5ilad9.apps.googleusercontent.com",
           "client_type": 3
         }
