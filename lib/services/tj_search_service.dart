@@ -17,20 +17,29 @@ class TjSearchException implements Exception {
   String toString() => message;
 }
 
+/// Production host of the `/api/tj-search` proxy. Not a secret; used when
+/// a build passes no `--dart-define=TJ_API_BASE_URL=...`, so a plain
+/// `flutter build` (release AAB, web) can always search.
+const String kDefaultTjApiBaseUrl = 'https://utanote-git-main-utanote.vercel.app';
+
+/// `--dart-define=TJ_API_BASE_URL=...` if given (e.g. a local or preview
+/// server), else [kDefaultTjApiBaseUrl].
+const String kTjApiBaseUrl = String.fromEnvironment(
+  'TJ_API_BASE_URL',
+  defaultValue: kDefaultTjApiBaseUrl,
+);
+
 /// Client for the `/api/tj-search` serverless proxy (see api/tj-search.js).
 /// Never talks to tjmedia.com directly — the server does that and returns
 /// normalized JSON only.
 ///
-/// [baseUrl] defaults to `--dart-define=TJ_API_BASE_URL=...` so it never
-/// needs to be hardcoded to localhost; see README/deploy notes for the
-/// exact flag.
+/// [baseUrl] defaults to [kTjApiBaseUrl].
 class TjSearchService {
   final String baseUrl;
   final http.Client _client;
 
   TjSearchService({String? baseUrl, http.Client? client})
-      : baseUrl =
-            baseUrl ?? const String.fromEnvironment('TJ_API_BASE_URL'),
+      : baseUrl = baseUrl ?? kTjApiBaseUrl,
         _client = client ?? http.Client();
 
   Future<List<TjSearchResult>> search(
