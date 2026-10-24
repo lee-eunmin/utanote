@@ -4,8 +4,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:utanote/account/account_controller.dart';
 import 'package:utanote/account/account_deletion.dart';
 import 'package:utanote/account/auth_gateway.dart';
+import 'package:utanote/config/account_links.dart';
 import 'package:utanote/sync/account_data_deletion.dart';
 import 'package:utanote/sync/cloud_sync_backend.dart';
+import 'package:utanote/ui/external_link.dart';
 import 'package:utanote/ui/widgets/account_button.dart';
 
 import 'support/sync_fakes.dart';
@@ -182,6 +184,146 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('accountDeleteButton')), findsNothing);
     expect(find.byKey(const Key('googleSignInButton')), findsOneWidget);
+  });
+
+  // --- External links (privacy policy, deletion request page) -------------
+
+  group('external links', () {
+    late List<Uri> opened;
+    var launchResult = true;
+    Object? launchError;
+
+    setUp(() {
+      opened = [];
+      launchResult = true;
+      launchError = null;
+      externalUrlLauncher = (uri) async {
+        opened.add(uri);
+        if (launchError case final e?) throw e;
+        return launchResult;
+      };
+    });
+
+    tearDown(() {
+      externalUrlLauncher = (uri) async =>
+          throw StateError('no browser in tests');
+    });
+
+    Future<void> tapKey(WidgetTester tester, String key) async {
+      final finder = find.byKey(Key(key));
+      await tester.ensureVisible(finder);
+      await tester.pumpAndSettle();
+      await tester.tap(finder);
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('signed in: privacy policy row opens the policy URL',
+        (tester) async {
+      await setUpWorld(tester);
+      expect(find.text('개인정보처리방침'), findsOneWidget);
+      await tapKey(tester, 'privacyPolicyLink');
+      expect(opened, [Uri.parse(kPrivacyPolicyUrl!)]);
+      expect(find.byKey(const Key('externalLinkFailedDialog')), findsNothing);
+      expect(deletionAuth.reauthCalls, 0);
+    });
+
+    testWidgets('signed out: privacy policy row is still offered',
+        (tester) async {
+      await setUpWorld(tester);
+      await account.signOut();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('privacyPolicyLink')), findsOneWidget);
+      await tapKey(tester, 'privacyPolicyLink');
+      expect(opened, [Uri.parse(kPrivacyPolicyUrl!)]);
+    });
+
+    testWidgets(
+        'deletion dialog: external request link opens the web page only',
+        (tester) async {
+      await setUpWorld(tester);
+      await tapKey(tester, 'accountDeleteButton');
+      expect(find.text('앱 밖에서 계정 삭제 요청'), findsOneWidget);
+      expect(find.textContaining('https://'), findsNothing);
+
+      await tapKey(tester, 'accountDeletionExternalLink');
+      expect(opened, [Uri.parse(kAccountDeletionRequestUrl!)]);
+      // The dialog stays open and nothing was deleted or started.
+      expect(find.text('계정과 클라우드 백업을 삭제할까요?'), findsOneWidget);
+      expect(deletionAuth.reauthCalls, 0);
+      expect(deletionAuth.deleteCalls, 0);
+      expect(eraser.calls, 0);
+      expect(store.pending, isNull);
+      expect(deletion.busy, isFalse);
+      expect(account.phase, AccountPhase.signedIn);
+
+      // The in-app delete button still works afterwards.
+      await tapKey(tester, 'accountDeleteConfirm');
+      expect(deletionAuth.reauthCalls, 1);
+      expect(deletionAuth.deleteCalls, 1);
+      expect(account.phase, AccountPhase.signedOut);
+      expect(opened, hasLength(1));
+    });
+
+    testWidgets('launcher returns false: notice, no crash', (tester) async {
+      await setUpWorld(tester);
+      launchResult = false;
+      await tapKey(tester, 'privacyPolicyLink');
+      expect(find.byKey(const Key('externalLinkFailedDialog')), findsOneWidget);
+      expect(find.textContaining('링크를 열지 못했어요'), findsOneWidget);
+      await tester.tap(find.text('확인'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('externalLinkFailedDialog')), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('launcher throws: notice, no crash, deletion untouched',
+        (tester) async {
+      await setUpWorld(tester);
+      launchError = Exception('no activity');
+      await tapKey(tester, 'accountDeleteButton');
+      await tapKey(tester, 'accountDeletionExternalLink');
+      expect(tester.takeException(), isNull);
+      expect(find.byKey(const Key('externalLinkFailedDialog')), findsOneWidget);
+      expect(deletionAuth.reauthCalls, 0);
+      expect(eraser.calls, 0);
+    });
+
+    testWidgets('only http/https links reach the launcher', (tester) async {
+      late BuildContext ctx;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (c) {
+              ctx = c;
+              return const SizedBox();
+            },
+          ),
+        ),
+      );
+      for (final bad in [
+        'mailto:utanote.karaoke@gmail.com',
+        'javascript:alert(1)',
+        'file:///etc/hosts',
+        'intent://x',
+        '/relative/path',
+        'https://',
+      ]) {
+        final f = openExternalUrl(ctx, bad);
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('externalLinkFailedDialog')), findsOneWidget,
+            reason: bad);
+        await tester.tap(find.text('확인'));
+        await tester.pumpAndSettle();
+        expect(await f, isFalse, reason: bad);
+      }
+      expect(opened, isEmpty);
+      expect(isAllowedExternalUrl(Uri.parse('http://example.com/')), isTrue);
+      expect(isAllowedExternalUrl(Uri.parse(kPrivacyPolicyUrl!)), isTrue);
+      expect(
+        isAllowedExternalUrl(Uri.parse(kAccountDeletionRequestUrl!)),
+        isTrue,
+      );
+    });
   });
 
   // --- Phase B-5.1: same Google account, new uid ---------------------------

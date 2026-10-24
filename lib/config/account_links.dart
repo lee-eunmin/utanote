@@ -8,7 +8,11 @@
 library;
 
 /// "UtaNote 계정 및 데이터 삭제 요청" web page (outside the app).
-const String? kAccountDeletionRequestUrl = null;
+// ignore: unnecessary_nullable_for_final_variable_declarations
+const String? kAccountDeletionRequestUrl =
+    'https://lee-eunmin.github.io/utanote-account-deletion/';
 
 /// Privacy policy page.
-const String? kPrivacyPolicyUrl = null;
+// ignore: unnecessary_nullable_for_final_variable_declarations
+const String? kPrivacyPolicyUrl =
+    'https://docs.google.com/document/d/e/2PACX-1vRNG4p1IuKYHKLgS7ahPAWu5_MH4vmY8JTvVZjpE8Yi-pFvP6donk4ll6QQRQ0ikq8w5Wgcy428km3F/pub';

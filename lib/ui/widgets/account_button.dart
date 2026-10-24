@@ -7,6 +7,7 @@ import '../../config/account_links.dart';
 import '../../sync/cloud_sync_controller.dart';
 import '../../sync/sync_records.dart';
 import '../../theme/app_theme.dart';
+import '../external_link.dart';
 import 'app_header.dart';
 
 /// Header entry for the Google account sheet. Takes no space when there is
@@ -76,34 +77,38 @@ class AccountSheet extends StatelessWidget {
           borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
         ),
         padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-        child: ListenableBuilder(
-          listenable: Listenable.merge([
-            account,
-            ?account.cloudSync,
-            ?account.deletion,
-          ]),
-          builder: (context, _) => Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 36,
-                  height: 4,
-                  margin: const EdgeInsets.only(bottom: 16),
-                  decoration: BoxDecoration(
-                    color: AppColors.hairline,
-                    borderRadius: BorderRadius.circular(4),
+        // Scrolls when the content is taller than the bottom sheet allows
+        // (small screens, long account states).
+        child: SingleChildScrollView(
+          child: ListenableBuilder(
+            listenable: Listenable.merge([
+              account,
+              ?account.cloudSync,
+              ?account.deletion,
+            ]),
+            builder: (context, _) => Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 36,
+                    height: 4,
+                    margin: const EdgeInsets.only(bottom: 16),
+                    decoration: BoxDecoration(
+                      color: AppColors.hairline,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
                   ),
                 ),
-              ),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 4),
-                child: Text('계정', style: AppTextStyles.sheetTitle),
-              ),
-              const SizedBox(height: 14),
-              ..._body(),
-            ],
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 4),
+                  child: Text('계정', style: AppTextStyles.sheetTitle),
+                ),
+                const SizedBox(height: 14),
+                ..._body(),
+              ],
+            ),
           ),
         ),
       ),
@@ -126,9 +131,7 @@ class AccountSheet extends StatelessWidget {
     switch (account.phase) {
       case AccountPhase.initializing:
       case AccountPhase.unavailable:
-        return [
-          const _Note('지금은 로그인을 사용할 수 없어요.'),
-        ];
+        return [const _Note('지금은 로그인을 사용할 수 없어요.'), ..._privacyPolicy()];
       case AccountPhase.signedOut:
       case AccountPhase.signingIn:
         final busy = account.phase == AccountPhase.signingIn;
@@ -175,6 +178,7 @@ class AccountSheet extends StatelessWidget {
               label: Text(busy ? '로그인 중…' : 'Google로 로그인'),
             ),
           ),
+          ..._privacyPolicy(),
         ];
       case AccountPhase.signedIn:
         final user = account.user;
@@ -228,6 +232,7 @@ class AccountSheet extends StatelessWidget {
               label: const Text('로그아웃'),
             ),
           ),
+          ..._privacyPolicy(),
           if (account.deletion case final deletion?
               when account.linkStatus !=
                   AccountLinkStatus.previousAccountSameEmail) ...[
@@ -238,6 +243,44 @@ class AccountSheet extends StatelessWidget {
           ],
         ];
     }
+  }
+}
+
+/// "개인정보처리방침" row, kept in the general area away from the red
+/// deletion entry. Hidden while no policy URL is configured.
+List<Widget> _privacyPolicy() => [
+  if (kPrivacyPolicyUrl case final url?) ...[
+    const SizedBox(height: 4),
+    _ExternalLinkButton(
+      key: const Key('privacyPolicyLink'),
+      label: '개인정보처리방침',
+      url: url,
+    ),
+  ],
+];
+
+/// Muted, full-width row that opens [url] in the external browser.
+class _ExternalLinkButton extends StatelessWidget {
+  final String label;
+  final String url;
+
+  const _ExternalLinkButton({
+    super.key,
+    required this.label,
+    required this.url,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      child: TextButton.icon(
+        style: TextButton.styleFrom(foregroundColor: AppColors.textSecondary),
+        onPressed: () => openExternalUrl(context, url),
+        icon: const Icon(Icons.open_in_new_rounded, size: 16),
+        label: Text(label),
+      ),
+    );
   }
 }
 
@@ -662,13 +705,13 @@ Future<bool?> confirmAccountDeletion(BuildContext context) {
               style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
             ),
             if (kAccountDeletionRequestUrl case final url?) ...[
-              const SizedBox(height: 8),
-              SelectableText(
-                '앱 밖에서 삭제 요청: $url',
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: AppColors.textSecondary,
-                ),
+              const SizedBox(height: 4),
+              // Only opens the web page; the in-app deletion stays on the
+              // "계정 및 백업 삭제" button and the dialog stays open.
+              _ExternalLinkButton(
+                key: const Key('accountDeletionExternalLink'),
+                label: '앱 밖에서 계정 삭제 요청',
+                url: url,
               ),
             ],
           ],
