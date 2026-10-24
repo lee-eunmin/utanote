@@ -18,6 +18,7 @@ import 'widgets/privacy_options_button.dart';
 import 'widgets/responsive_center.dart';
 import 'widgets/selection_action_bar.dart';
 import 'widgets/song_card.dart';
+import 'widgets/songbook_account_card.dart';
 
 const _filterAll = kSongFilterAll;
 const _filterFavorite = '즐겨찾기';
@@ -257,6 +258,10 @@ class SongListScreenState extends State<SongListScreen> {
                           },
                         ),
                 ),
+                // No songs at all (new install, reinstall, everything
+                // deleted): keep sign-in / restore / backup reachable.
+                if (!_loading && _totalCount == 0)
+                  SongbookAccountCard(account: widget.account),
                 SelectionActionBar(
                   visible: _selectionMode,
                   count: _selected.length,

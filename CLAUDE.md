@@ -231,6 +231,17 @@ CREATE TABLE folder_songs (
   never synced). Signed out → "Google 계정 연결" (sign in, then the B-3
   first-connection flow in the account sheet); signed in but unbound →
   "클라우드 백업 설정" (no account picker). Never shown once bound.
+- Empty songbook (0 songs): `SongbookAccountCard` under the song list is
+  always shown (sign-in / backup status, reusing `CloudBackupSection`;
+  protection states only point to the account sheet). After sign-in on an
+  unbound device with no songs, `CloudSyncController` (flag
+  `findRestorableBackup`, on in production) runs the read-only
+  `InitialSyncEngine.findRestorableBackup` (same reads/classification as
+  `assess`; only the restore case counts; live songs/folders only). An
+  interactive sign-in shows "클라우드 백업을 찾았어요" once
+  (`CloudRestorePromptGate`); "복원하기" is plain `startSetup()` (Case B),
+  "나중에" only closes — the card/sheet keep a "복원하기" entry. The lookup
+  never writes anything.
 
 ## 11. Account & cloud data deletion (Phase B-5, Android only)
 

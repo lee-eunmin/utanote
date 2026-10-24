@@ -78,6 +78,18 @@ class AutoSyncConfig {
   static int _utcNowMs() => DateTime.now().toUtc().millisecondsSinceEpoch;
 }
 
+/// A cloud backup found for a signed-in, unbound device with no songs
+/// (the empty-songbook restore offer). Restoring it is the normal first
+/// connection ([CloudSyncController.startSetup]).
+class CloudRestoreOffer {
+  final String uid;
+
+  /// Live (not deleted) songs/folders in the cloud.
+  final SyncDataSummary cloud;
+
+  const CloudRestoreOffer({required this.uid, required this.cloud});
+}
+
 /// UI state of the first cloud connection and of two-way syncs.
 ///
 /// The first connection ("클라우드 백업 설정") only ever runs when the user
@@ -97,15 +109,32 @@ class CloudSyncController extends ChangeNotifier {
   /// Null → no automatic sync (manual only).
   final AutoSyncConfig? _auto;
 
+  /// Whether to look for a restorable cloud backup (read-only) when a
+  /// device with no songs is signed in but not bound.
+  final bool _findRestorableBackup;
+
   CloudSyncController({
     required this._engine,
     required this._account,
     this._manual,
     AutoSyncConfig? autoSync,
+    this._findRestorableBackup = false,
   }) : _auto = autoSync {
     _account.addListener(_onAccountChanged);
     _onAccountChanged();
   }
+
+  // --- empty-songbook restore offer (read-only lookup) ---
+  CloudRestoreOffer? _restoreOffer;
+  bool _restorePromptPending = false;
+  bool _findingBackup = false;
+  int _findToken = 0;
+  Future<void>? _finding;
+
+  /// Set while the user's own Google sign-in is in progress, so the
+  /// lookup after it may show the "클라우드 백업을 찾았어요" prompt (a
+  /// restored session only updates the account sheet / empty-list card).
+  bool _interactiveSignIn = false;
 
   // --- automatic sync state ---
   Timer? _debounceTimer;
@@ -169,7 +198,41 @@ class CloudSyncController extends ChangeNotifier {
   /// UTC epoch ms of the last fully successful sync, if known.
   int? get lastSyncAtMs => _lastSyncAtMs;
 
+  /// A cloud backup this signed-in, unbound, song-less device can restore.
+  /// Only while [CloudSyncPhase.notConnected] and nothing is running.
+  CloudRestoreOffer? get restoreOffer =>
+      _phase == CloudSyncPhase.notConnected && !_busy && !_suspended
+      ? _restoreOffer
+      : null;
+
+  /// The read-only backup lookup is running.
+  bool get findingBackup => _findingBackup;
+
+  /// The offer to show once as a prompt right after the user signed in, or
+  /// null. Each offer is handed out at most once; "나중에" keeps
+  /// [restoreOffer] (the account sheet / empty list still offer restoring).
+  CloudRestoreOffer? takeRestorePrompt() {
+    final offer = restoreOffer;
+    if (offer == null || !_restorePromptPending) return null;
+    _restorePromptPending = false;
+    return offer;
+  }
+
+  /// Completes when the current backup lookup (if any) has finished.
+  @visibleForTesting
+  Future<void> waitForBackupLookup() => _finding ?? Future<void>.value();
+
   void _onAccountChanged() {
+    final accountPhase = _account.phase;
+    if (accountPhase == AccountPhase.signingIn) {
+      _interactiveSignIn = true;
+    } else if (accountPhase != AccountPhase.signedIn) {
+      _interactiveSignIn = false;
+    }
+    final interactive =
+        accountPhase == AccountPhase.signedIn && _interactiveSignIn;
+    if (accountPhase == AccountPhase.signedIn) _interactiveSignIn = false;
+
     // A sync result of another account must not be shown for this one
     // (e.g. old uid denied → account re-created with a new uid).
     final current = _account.phase == AccountPhase.signedIn
@@ -186,11 +249,13 @@ class CloudSyncController extends ChangeNotifier {
       _uid = null;
       _pending = null;
       _message = null;
+      _clearRestoreOffer();
       _set(CloudSyncPhase.unavailable);
       return;
     }
     final link = _account.linkStatus;
     if (link == AccountLinkStatus.sameAccount) {
+      _clearRestoreOffer();
       _uid = user.uid;
       _pending = null;
       _message = null;
@@ -206,6 +271,7 @@ class CloudSyncController extends ChangeNotifier {
       return;
     }
     if (link != AccountLinkStatus.unlinked) {
+      _clearRestoreOffer();
       _set(CloudSyncPhase.unavailable);
       return;
     }
@@ -215,11 +281,53 @@ class CloudSyncController extends ChangeNotifier {
         (_phase == CloudSyncPhase.needsMergeDecision ||
             _phase == CloudSyncPhase.failed);
     if (!keep) {
+      final entering =
+          _phase != CloudSyncPhase.notConnected || _uid != user.uid;
       _uid = user.uid;
       _pending = null;
       _message = null;
+      if (entering) _clearRestoreOffer();
       _set(CloudSyncPhase.notConnected);
+      if (entering) _lookForRestorableBackup(user.uid, prompt: interactive);
     }
+  }
+
+  /// Read-only: asks the initial-sync engine whether this song-less,
+  /// unbound device could restore a cloud backup ([InitialSyncEngine
+  /// .findRestorableBackup]). Never writes anything; failures (offline,
+  /// ...) just mean no offer — "클라우드 백업 설정" stays available.
+  void _lookForRestorableBackup(String uid, {required bool prompt}) {
+    if (!_findRestorableBackup || _suspended) return;
+    final token = ++_findToken;
+    _findingBackup = true;
+    notifyListeners();
+    _finding = () async {
+      SyncDataSummary? found;
+      try {
+        found = await _engine.findRestorableBackup(uid);
+      } catch (e) {
+        debugPrint('[sync] backup lookup failed: $e');
+      }
+      if (token != _findToken) return; // superseded or cleared
+      _findingBackup = false;
+      if (found != null &&
+          (found.songs > 0 || found.folders > 0) &&
+          _phase == CloudSyncPhase.notConnected &&
+          _uid == uid &&
+          _account.user?.uid == uid) {
+        _restoreOffer = CloudRestoreOffer(uid: uid, cloud: found);
+        _restorePromptPending = prompt;
+      }
+      notifyListeners();
+    }();
+  }
+
+  /// Forgets the restore offer and cancels a running lookup's result.
+  void _clearRestoreOffer() {
+    _findToken++;
+    _findingBackup = false;
+    _restoreOffer = null;
+    _restorePromptPending = false;
   }
 
   /// "클라우드 백업 설정" / "다시 시도". Ignored while a run is going.
@@ -234,6 +342,7 @@ class CloudSyncController extends ChangeNotifier {
     _uid = user.uid;
     _pending = null;
     _message = null;
+    _clearRestoreOffer();
     _set(CloudSyncPhase.checking);
     try {
       final a = await _engine.assess(user.uid);
@@ -330,6 +439,12 @@ class CloudSyncController extends ChangeNotifier {
   /// A user write to songs/folders/memberships completed. Syncs after
   /// [AutoSyncConfig.debounce] of quiet; only for a bound device.
   void onLocalDataChanged() {
+    // The device has data again: an earlier restore offer no longer
+    // describes what "복원하기" would do.
+    if (_restoreOffer != null || _findingBackup) {
+      _clearRestoreOffer();
+      notifyListeners();
+    }
     final auto = _auto;
     if (auto == null || !_canTwoWaySync) return;
     _debounceTimer?.cancel();
@@ -449,6 +564,7 @@ class CloudSyncController extends ChangeNotifier {
   /// this returns.
   Future<void> suspendForAccountDeletion() async {
     _suspended = true;
+    _clearRestoreOffer();
     _debounceTimer?.cancel();
     _debounceTimer = null;
     _backoffTimer?.cancel();

@@ -51,6 +51,9 @@ AccountController? startAccount(
     // Phase B-4B: automatic sync for a bound device (start, foreground,
     // 5 s after user edits). Never for an unbound device.
     autoSync: const AutoSyncConfig(),
+    // Song-less, unbound device after sign-in: read-only look for a cloud
+    // backup to offer restoring (the restore itself is the first connection).
+    findRestorableBackup: true,
     account: controller,
   );
   // Phase B-5: "계정 및 클라우드 데이터 삭제". Hard-deletes only through its

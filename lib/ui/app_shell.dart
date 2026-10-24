@@ -6,6 +6,7 @@ import '../ads/list_ad_source.dart';
 import '../storage/local_storage.dart';
 import '../sync/cloud_sync_controller.dart';
 import 'backup_prompt.dart';
+import 'cloud_restore_prompt.dart';
 import 'folders_screen.dart';
 import 'song_list_screen.dart';
 import 'tj_search_screen.dart';
@@ -137,11 +138,14 @@ class _AppShellState extends State<AppShell> {
       prefs: widget.backupPromptPrefs,
       delay: widget.backupPromptDelay,
       now: widget.backupPromptNow ?? _utcNowMs,
-      child: Scaffold(
-        body: IndexedStack(index: _index, children: screens),
-        bottomNavigationBar: AppBottomNav(
-          currentIndex: _index,
-          onTap: _onTabTap,
+      child: CloudRestorePromptGate(
+        account: widget.account,
+        child: Scaffold(
+          body: IndexedStack(index: _index, children: screens),
+          bottomNavigationBar: AppBottomNav(
+            currentIndex: _index,
+            onTap: _onTabTap,
+          ),
         ),
       ),
     );

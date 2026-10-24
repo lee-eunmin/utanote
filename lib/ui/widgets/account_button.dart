@@ -212,7 +212,7 @@ class AccountSheet extends StatelessWidget {
             const SizedBox(height: 12),
             const _Note('로그아웃해도 이 기기의 노래와 폴더는 삭제되지 않습니다.'),
           ] else if (account.cloudSync case final cloud?) ...[
-            _CloudBackupSection(cloud: cloud),
+            CloudBackupSection(cloud: cloud),
             const SizedBox(height: 12),
             const _Note('로그아웃해도 이 기기의 노래와 폴더는 삭제되지 않습니다.'),
           ] else
@@ -306,10 +306,11 @@ class _Note extends StatelessWidget {
 }
 
 /// First cloud connection (Phase B-3). Runs only when the user taps it.
-class _CloudBackupSection extends StatelessWidget {
+/// Also used by the empty song list's account card.
+class CloudBackupSection extends StatelessWidget {
   final CloudSyncController cloud;
 
-  const _CloudBackupSection({required this.cloud});
+  const CloudBackupSection({super.key, required this.cloud});
 
   @override
   Widget build(BuildContext context) {
@@ -317,6 +318,45 @@ class _CloudBackupSection extends StatelessWidget {
       case CloudSyncPhase.unavailable:
         return const SizedBox.shrink();
       case CloudSyncPhase.notConnected:
+        // Song-less device and a backup in the cloud: restoring it is the
+        // same first connection as "클라우드 백업 설정".
+        if (cloud.restoreOffer case final offer?) {
+          return Column(
+            key: const Key('cloudRestoreOffer'),
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 4),
+                child: Text(
+                  '클라우드 백업이 있어요',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: Text(
+                  _summary(offer.cloud),
+                  key: const Key('cloudRestoreSummary'),
+                  style: AppTextStyles.meta,
+                ),
+              ),
+              const SizedBox(height: 10),
+              FilledButton.icon(
+                key: const Key('cloudRestoreButton'),
+                onPressed: cloud.busy || cloud.suspended
+                    ? null
+                    : cloud.startSetup,
+                icon: const Icon(Icons.cloud_download_outlined, size: 18),
+                label: const Text('복원하기'),
+              ),
+            ],
+          );
+        }
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [

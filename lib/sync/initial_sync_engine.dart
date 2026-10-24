@@ -136,6 +136,29 @@ class InitialSyncEngine {
     return _classify(uid, meta, local, cloud);
   }
 
+  /// Read-only check for the empty-songbook restore offer: would a first
+  /// connection for [uid] right now be a plain restore (device has no
+  /// songs, cloud has live data — the [InitialSyncMode.restore] case)?
+  /// Returns the cloud's live song/folder counts if so, else null (device
+  /// has songs, is bound, has an unfinished account deletion, or any other
+  /// case). Same reads and classification as [assess]; the cloud is not
+  /// read at all when the device already has songs. Writes nothing.
+  /// Throws [InitialSyncFailure] if the cloud can't be read.
+  Future<SyncDataSummary?> findRestorableBackup(String uid) async {
+    final meta = await store.readMeta();
+    if (meta.accountDeletionPending) return null;
+    if (_bound(meta, uid) != null) return null;
+    final local = await store.readSnapshot();
+    if (local.songs.isNotEmpty) return null;
+    final cloud = await _fetch(uid);
+    final a = _classify(uid, meta, local, cloud);
+    if (a.kind != InitialSyncAssessmentKind.ready ||
+        a.mode != InitialSyncMode.restore) {
+      return null;
+    }
+    return a.cloud;
+  }
+
   /// Runs the initial sync in [mode]. For anything but
   /// [InitialSyncMode.merge] the situation is re-checked first, and if it
   /// now needs the user's decision nothing is written and
