@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 
 import '../account/account_controller.dart';
@@ -6,8 +8,10 @@ import '../ads/list_ad_source.dart';
 import '../models/song.dart';
 import '../models/song_options.dart';
 import '../storage/local_storage.dart';
+import '../theme/app_theme.dart';
 import 'song_bulk_actions.dart';
 import 'song_edit_sheet.dart';
+import 'song_shuffle.dart';
 import 'song_status_filter.dart';
 import 'widgets/account_button.dart';
 import 'widgets/animated_song_list.dart';
@@ -43,12 +47,17 @@ class SongListScreen extends StatefulWidget {
   /// Google sign-in state (Android only). Null → no account entry.
   final AccountController? account;
 
+  /// Random source for "랜덤 정렬". Tests pass a seeded one; null → a new
+  /// unseeded [Random] per screen.
+  final Random? shuffleRandom;
+
   const SongListScreen({
     super.key,
     required this.storage,
     this.adSourceFactory,
     this.adsConsent,
     this.account,
+    this.shuffleRandom,
   });
 
   @override
@@ -66,11 +75,21 @@ class SongListScreenState extends State<SongListScreen> {
   final Set<int> _selected = {};
   ListAdSource? _ads;
 
+  /// Current "랜덤 정렬", or null for the default 곡 추가순. Lives only in
+  /// this State (never persisted), so every app start begins unshuffled.
+  SongShuffleOrder? _shuffle;
+  late final Random _shuffleRandom;
+
   bool get _selectionMode => _selected.isNotEmpty;
+
+  /// 0 = default order; increments on every random-button tap.
+  @visibleForTesting
+  int get shuffleGeneration => _shuffle?.generation ?? 0;
 
   @override
   void initState() {
     super.initState();
+    _shuffleRandom = widget.shuffleRandom ?? Random();
     _ads = widget.adSourceFactory?.call();
     _reload();
   }
@@ -95,7 +114,7 @@ class SongListScreenState extends State<SongListScreen> {
     if (!mounted) return;
     setState(() {
       _allMatching = base;
-      _displayed = _applyFilter(base);
+      _displayed = _arrange(base);
       _totalCount = all.length;
       _loading = false;
     });
@@ -112,10 +131,27 @@ class SongListScreenState extends State<SongListScreen> {
     }
   }
 
+  /// search result → filter → random order (if active). The random step
+  /// works on a copy, never on [_allMatching] itself.
+  List<Song> _arrange(List<Song> searched) {
+    final filtered = _applyFilter(searched);
+    return _shuffle?.apply(filtered) ?? filtered;
+  }
+
   void _onFilterChanged(String filter) {
     setState(() {
       _filter = filter;
-      _displayed = _applyFilter(_allMatching);
+      _displayed = _arrange(_allMatching);
+    });
+  }
+
+  void _onShufflePressed() {
+    setState(() {
+      _shuffle = SongShuffleOrder(
+        generation: shuffleGeneration + 1,
+        random: _shuffleRandom,
+      );
+      _displayed = _arrange(_allMatching);
     });
   }
 
@@ -225,10 +261,21 @@ class SongListScreenState extends State<SongListScreen> {
                   onChanged: (_) => _reload(),
                 ),
                 const SizedBox(height: 14),
-                FilterChipBar(
-                  options: _filterOptions,
-                  selected: _filter,
-                  onSelected: _onFilterChanged,
+                Row(
+                  children: [
+                    Expanded(
+                      child: FilterChipBar(
+                        options: _filterOptions,
+                        selected: _filter,
+                        onSelected: _onFilterChanged,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    _ShuffleButton(
+                      active: _shuffle != null,
+                      onPressed: _onShufflePressed,
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 4),
                 Expanded(
@@ -286,6 +333,39 @@ class SongListScreenState extends State<SongListScreen> {
                   ],
                 ),
               ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Compact "랜덤 정렬" button at the right end of the filter row. Every tap
+/// creates a new random order; tinted while a random order is active.
+class _ShuffleButton extends StatelessWidget {
+  final bool active;
+  final VoidCallback onPressed;
+
+  const _ShuffleButton({required this.active, required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: '랜덤 정렬',
+      child: Material(
+        key: const Key('shuffleSongsButton'),
+        color: AppColors.surfaceHigh,
+        borderRadius: BorderRadius.circular(9),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(9),
+          onTap: onPressed,
+          child: Padding(
+            padding: const EdgeInsets.all(7),
+            child: Icon(
+              Icons.shuffle_rounded,
+              size: 18,
+              color: active ? AppColors.accent : AppColors.textSecondary,
             ),
           ),
         ),
