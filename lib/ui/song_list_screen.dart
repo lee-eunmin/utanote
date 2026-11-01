@@ -349,23 +349,36 @@ class _ShuffleButton extends StatelessWidget {
 
   const _ShuffleButton({required this.active, required this.onPressed});
 
+  static const double _size = 28;
+
+  /// [FilterChipBar] centers "text + 6px gap + 2px underline" in its row,
+  /// so the label text sits (6 + 2) / 2 = 4px above the row's center. Shift
+  /// the button by the same amount so its center lines up with the text.
+  /// Paint/hit-test only: the row's layout (and its width) is unchanged.
+  static const double _textCenterOffset = -(6 + 2) / 2;
+
   @override
   Widget build(BuildContext context) {
-    return Tooltip(
-      message: '랜덤 정렬',
-      child: Material(
-        key: const Key('shuffleSongsButton'),
-        color: AppColors.surfaceHigh,
-        borderRadius: BorderRadius.circular(9),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(9),
-          onTap: onPressed,
-          child: Padding(
-            padding: const EdgeInsets.all(7),
-            child: Icon(
-              Icons.shuffle_rounded,
-              size: 18,
-              color: active ? AppColors.accent : AppColors.textSecondary,
+    return Transform.translate(
+      offset: const Offset(0, _textCenterOffset),
+      child: Tooltip(
+        message: '랜덤 정렬',
+        child: Material(
+          key: const Key('shuffleSongsButton'),
+          color: AppColors.surfaceHigh,
+          borderRadius: BorderRadius.circular(8),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: onPressed,
+            child: SizedBox.square(
+              dimension: _size,
+              child: Center(
+                child: Icon(
+                  Icons.shuffle_rounded,
+                  size: 17,
+                  color: active ? AppColors.accent : AppColors.textSecondary,
+                ),
+              ),
             ),
           ),
         ),
