@@ -38,10 +38,10 @@ const _filterOptions = [
 class SongListScreen extends StatefulWidget {
   final LocalStorage storage;
 
-  /// Supplies in-list native ads (Android only). Null → no ads.
+  /// Supplies in-list native ads (Android/iOS). Null → no ads.
   final ListAdSourceFactory? adSourceFactory;
 
-  /// Ad consent state (Android only); drives the privacy settings entry.
+  /// Ad consent state (Android/iOS); drives the privacy settings entry.
   final AdsConsentController? adsConsent;
 
   /// Google sign-in state (Android only). Null → no account entry.

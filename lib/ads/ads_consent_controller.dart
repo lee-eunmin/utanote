@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 /// The subset of Google's UMP (User Messaging Platform) consent API the app
-/// uses, as Futures. The Android implementation wraps `google_mobile_ads`'
+/// uses, as Futures. The mobile (Android/iOS) implementation wraps `google_mobile_ads`'
 /// `ConsentInformation`/`ConsentForm`; tests use a fake. Each method may
 /// throw on failure.
 abstract class ConsentGateway {

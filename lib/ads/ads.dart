@@ -1,7 +1,7 @@
 /// Ads entry point. Picks the implementation at compile time, the same way
 /// `storage/local_storage_factory.dart` does:
 /// - `dart.library.io` present → `android/android_ads.dart` (google_mobile_ads;
-///   still a no-op at runtime unless the platform is Android).
+///   still a no-op at runtime unless the platform is Android or iOS).
 /// - otherwise (Web) → `ads_stub.dart`, so the ads plugin is never compiled
 ///   into the Web build and no ads are ever shown there.
 library;

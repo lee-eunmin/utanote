@@ -26,10 +26,7 @@ class DefaultFirebaseOptions {
       case TargetPlatform.android:
         return android;
       case TargetPlatform.iOS:
-        throw UnsupportedError(
-          'DefaultFirebaseOptions have not been configured for ios - '
-          'you can reconfigure this by running the FlutterFire CLI again.',
-        );
+        return ios;
       case TargetPlatform.macOS:
         throw UnsupportedError(
           'DefaultFirebaseOptions have not been configured for macos - '
@@ -58,5 +55,15 @@ class DefaultFirebaseOptions {
     messagingSenderId: '1021818890974',
     projectId: 'utanote-50d07',
     storageBucket: 'utanote-50d07.firebasestorage.app',
+  );
+
+  static const FirebaseOptions ios = FirebaseOptions(
+    apiKey: 'AIzaSyDUoU3bjVpdWzIFzXYTG0eMOfPSqwbSWgk',
+    appId: '1:1021818890974:ios:03c054a12a869c13bcf04f',
+    messagingSenderId: '1021818890974',
+    projectId: 'utanote-50d07',
+    storageBucket: 'utanote-50d07.firebasestorage.app',
+    iosClientId: '1021818890974-3qf1bls81m31ho1cng1arhdsjrh40co7.apps.googleusercontent.com',
+    iosBundleId: 'com.eungman.utanote',
   );
 }

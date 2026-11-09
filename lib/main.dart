@@ -11,9 +11,9 @@ import 'ui/backup_prompt.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Android only: kicks off the UMP consent flow without awaiting it, so a
+  // Android/iOS: kicks off the UMP consent flow without awaiting it, so a
   // slow or failing consent request never delays or blocks startup. Ads stay
-  // disabled until consent allows them (null on Web/iOS: no ads, no UMP).
+  // disabled until consent allows them (null on Web: no ads, no UMP).
   final adsConsent = startAds();
   final storage = createLocalStorage();
   await storage.init();
@@ -51,10 +51,10 @@ Future<void> main() async {
 class UtaNoteApp extends StatelessWidget {
   final LocalStorage storage;
 
-  /// In-list native ads for the main song list (Android only). Null → no ads.
+  /// In-list native ads for the main song list (Android/iOS). Null → no ads.
   final ListAdSourceFactory? songListAdSourceFactory;
 
-  /// Ad consent state (Android only). Null → no ads, no privacy entry.
+  /// Ad consent state (Android/iOS). Null → no ads, no privacy entry.
   final AdsConsentController? adsConsent;
 
   /// Google sign-in (Android only). Null → no account entry.

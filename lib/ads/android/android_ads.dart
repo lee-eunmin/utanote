@@ -10,8 +10,8 @@ import '../ads_consent_controller.dart';
 import '../list_ad_source.dart';
 import 'ump_consent_gateway.dart';
 
-/// Ads are Android-only for now; iOS/desktop (and test hosts) get no ads.
-bool get _adsSupported => Platform.isAndroid;
+/// Ads run on Android and iOS; desktop (and test hosts) get no ads.
+bool get _adsSupported => Platform.isAndroid || Platform.isIOS;
 
 AdsConsentController? _consent;
 
@@ -28,9 +28,9 @@ AdsConsentController? startAds() {
 
 ListAdSourceFactory? songListAdSourceFactory() {
   final consent = _consent;
-  if (consent == null) return null;
-  return () =>
-      NativeListAdSource(adUnitId: kSongListNativeAdUnitId, consent: consent);
+  final adUnitId = songListNativeAdUnitId;
+  if (consent == null || adUnitId == null) return null;
+  return () => NativeListAdSource(adUnitId: adUnitId, consent: consent);
 }
 
 /// Native-template ads for a song list.
