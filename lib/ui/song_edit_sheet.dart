@@ -205,32 +205,37 @@ class _SongEditSheetState extends State<_SongEditSheet> {
     }
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: SafeArea(
-        top: false,
-        child: Container(
-          decoration: const BoxDecoration(
-            color: AppColors.surfaceHigh,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-          ),
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Center(
-                  child: Container(
-                    width: 36,
-                    height: 4,
-                    margin: const EdgeInsets.only(bottom: 18),
-                    decoration: BoxDecoration(
-                      color: AppColors.hairline,
-                      borderRadius: BorderRadius.circular(4),
+      // The sheet background sits outside SafeArea so the bottom safe-area
+      // inset (iOS home indicator, Android gesture bar) is painted in the
+      // sheet color instead of showing the dark scrim behind it.
+      child: DecoratedBox(
+        decoration: const BoxDecoration(
+          color: AppColors.surfaceHigh,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+        ),
+        child: SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 36,
+                      height: 4,
+                      margin: const EdgeInsets.only(bottom: 18),
+                      decoration: BoxDecoration(
+                        color: AppColors.hairline,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
                     ),
                   ),
-                ),
-                ..._formFields(context),
-              ],
+                  ..._formFields(context),
+                ],
+              ),
             ),
           ),
         ),
