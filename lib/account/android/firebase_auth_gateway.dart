@@ -20,8 +20,8 @@ import '../account_controller.dart';
 import '../account_deletion.dart';
 import '../auth_gateway.dart';
 
-/// Sign-in is Android-only for now; iOS/desktop (and test hosts) get none.
-bool get _accountSupported => Platform.isAndroid;
+/// Sign-in runs on Android and iOS; desktop (and test hosts) get none.
+bool get _accountSupported => Platform.isAndroid || Platform.isIOS;
 
 AccountController? _controller;
 
@@ -99,7 +99,7 @@ class _SqliteBoundAccount
 }
 
 /// Firebase Authentication with a Google credential from Google Sign-In
-/// (Android Credential Manager). Holds no app data.
+/// (Android Credential Manager / iOS GoogleSignIn SDK). Holds no app data.
 class FirebaseAuthGateway implements AuthGateway, AccountDeletionAuth {
   static const _initTimeout = Duration(seconds: 10);
   static const _signInTimeout = Duration(seconds: 30);
