@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io' show Platform;
 
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 
@@ -8,7 +9,14 @@ import '../../theme/app_theme.dart';
 import '../ad_unit_ids.dart';
 import '../ads_consent_controller.dart';
 import '../list_ad_source.dart';
+import '../native_ad_layout.dart';
 import 'ump_consent_gateway.dart';
+
+/// Template on Android, custom iOS factory view on iOS (see
+/// [SongListNativeAdLayout]).
+final SongListNativeAdLayout _layout = SongListNativeAdLayout.forPlatform(
+  defaultTargetPlatform,
+);
 
 /// Ads run on Android and iOS; desktop (and test hosts) get no ads.
 bool get _adsSupported => Platform.isAndroid || Platform.isIOS;
@@ -86,7 +94,8 @@ class _NativeAdHolder extends ChangeNotifier {
     _ad = NativeAd(
       adUnitId: adUnitId,
       request: const AdRequest(),
-      nativeTemplateStyle: _templateStyle(),
+      factoryId: _layout.factoryId,
+      nativeTemplateStyle: _layout.usesTemplate ? _templateStyle() : null,
       listener: NativeAdListener(
         onAdLoaded: (_) {
           if (_disposed) return;
@@ -100,7 +109,18 @@ class _NativeAdHolder extends ChangeNotifier {
         },
       ),
     );
-    unawaited(_ad!.load());
+    final ad = _ad!;
+    // The request itself can be refused before any listener callback, e.g.
+    // on iOS when the native ad factory isn't registered ("Can't find
+    // NativeAdFactory"). Same as a failed load: the slot stays zero-size,
+    // no retry, no uncaught error.
+    unawaited(
+      ad.load().catchError((Object e) {
+        debugPrint('[ads] native ad request failed: $e');
+        if (identical(_ad, ad)) _ad = null;
+        unawaited(ad.dispose());
+      }),
+    );
   }
 
   @override
@@ -142,8 +162,6 @@ NativeTemplateStyle _templateStyle() => NativeTemplateStyle(
 /// mistaken for a song. Zero-size until the ad has loaded, and hidden again
 /// if consent is later withdrawn via the privacy options form.
 class _NativeAdCard extends StatelessWidget {
-  static const _templateHeight = 96.0;
-
   final _NativeAdHolder holder;
   final AdsConsentController consent;
 
@@ -171,7 +189,7 @@ class _NativeAdCard extends StatelessWidget {
               const Text('광고', style: AppTextStyles.label),
               const SizedBox(height: 6),
               SizedBox(
-                height: _templateHeight,
+                height: _layout.height,
                 child: AdWidget(ad: ad),
               ),
             ],
