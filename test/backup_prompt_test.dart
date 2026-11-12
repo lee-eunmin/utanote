@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -91,6 +92,53 @@ Future<void> settleReal(WidgetTester tester, bool Function() done) async {
     await tester.pump(const Duration(milliseconds: 50));
   }
   await tester.pumpAndSettle();
+}
+
+/// Waits until the first connection run by [sync] has finished with
+/// [CloudSyncPhase.connected], driven by the controller's own change
+/// notifications rather than a fixed number of short waits.
+///
+/// The run does real SQLite I/O (on real time) while its continuations
+/// run in the test's fake-async zone, so the loop alternates: real time
+/// until the next phase change (or at most `tick`), then a frame so the
+/// fake zone processes what that I/O completed. Fails with the phase and
+/// message as soon as the run ends in another terminal phase, and after
+/// [timeout] of real time at the latest: it never waits forever.
+Future<void> waitForConnected(
+  WidgetTester tester,
+  CloudSyncController sync, {
+  Duration timeout = const Duration(seconds: 30),
+}) async {
+  const tick = Duration(milliseconds: 50);
+  var changed = Completer<void>();
+  void onChange() {
+    if (!changed.isCompleted) changed.complete();
+  }
+
+  sync.addListener(onChange);
+  final elapsed = Stopwatch()..start();
+  try {
+    while (sync.phase != CloudSyncPhase.connected) {
+      if (sync.phase == CloudSyncPhase.failed ||
+          sync.phase == CloudSyncPhase.needsMergeDecision) {
+        fail('first connection ended in ${sync.phase} '
+            '(message: ${sync.message}) instead of connected');
+      }
+      if (elapsed.elapsed > timeout) {
+        fail('first connection did not reach connected within $timeout '
+            '(still ${sync.phase})');
+      }
+      final next = changed.future;
+      await tester.runAsync(
+          () => Future.any([next, Future<void>.delayed(tick)]));
+      if (changed.isCompleted) changed = Completer<void>();
+      await tester.pump();
+    }
+  } finally {
+    sync.removeListener(onChange);
+  }
+  // Render the connected state.
+  await tester.pump();
 }
 
 void main() {
@@ -323,12 +371,7 @@ void main() {
           tester, () => find.text('클라우드 백업 설정').evaluate().isNotEmpty);
       expect(find.text('클라우드 백업 설정'), findsOneWidget);
       await tester.tap(find.byKey(const Key('backupPromptConnect')));
-      for (var i = 0; i < 20; i++) {
-        await tester.runAsync(
-            () => Future<void>.delayed(const Duration(milliseconds: 50)));
-        await tester.pump();
-        if (account.cloudSync!.phase == CloudSyncPhase.connected) break;
-      }
+      await waitForConnected(tester, account.cloudSync!);
       expect(account.cloudSync!.phase, CloudSyncPhase.connected);
       expect(find.text('백업 연결됨'), findsOneWidget);
       late String? boundUid;
