@@ -8,6 +8,7 @@ import 'storage/observed_local_storage.dart';
 import 'theme/app_theme.dart';
 import 'ui/app_shell.dart';
 import 'ui/backup_prompt.dart';
+import 'ui/widgets/keyboard_dismiss.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -86,6 +87,10 @@ class UtaNoteApp extends StatelessWidget {
       title: 'UtaNote',
       debugShowCheckedModeBanner: false,
       theme: buildAppTheme(),
+      // Tapping outside a text field closes the keyboard everywhere
+      // (screens, sheets, dialogs): one place, above the Navigator.
+      builder: (context, child) =>
+          DismissKeyboardOnTapOutside(child: child ?? const SizedBox.shrink()),
       home: AppShell(
         storage: storage,
         songListAdSourceFactory: songListAdSourceFactory,

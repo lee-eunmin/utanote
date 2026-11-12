@@ -37,7 +37,11 @@ const _debounce = Duration(milliseconds: 60);
 
 /// Like production's binding source: uid, email hint, explicit release.
 class _Bound
-    implements BoundAccountSource, BoundAccountEmailSource, PreviousBindingRelease {
+    implements
+        BoundAccountSource,
+        BoundAccountEmailSource,
+        PreviousBindingRelease,
+        CloudBindingRelease {
   final SqliteLocalStorage storage;
   _Bound(this.storage);
 
@@ -56,6 +60,14 @@ class _Bound
   Future<void> releasePreviousBinding({required String expectedBoundUid}) {
     releases++;
     return _sync.releasePreviousBinding(expectedBoundUid: expectedBoundUid);
+  }
+
+  int cloudReleases = 0;
+
+  @override
+  Future<void> releaseCloudBinding({required String expectedBoundUid}) {
+    cloudReleases++;
+    return _sync.releaseCloudBinding(expectedBoundUid: expectedBoundUid);
   }
 }
 
@@ -1189,6 +1201,209 @@ void main() {
       expect(sameAccountEmail('', ''), isFalse);
     });
   });
+  // -------------------------------------------------------------------------
+  // "이 기기의 클라우드 연결 해제": switch to another Google account safely
+  // -------------------------------------------------------------------------
+  group('release this device\'s cloud binding (account switch)', () {
+    const bob = AccountUser(uid: _bobUid, email: 'bob@example.com');
+
+    String aliceCloud(FakeCloudBackend cloud) => cloud.users[_uid].toString();
+    String bobCloud(FakeCloudBackend cloud) => cloud.users[_bobUid].toString();
+
+    test('while bound, another account is still blocked (no auto link)',
+        () async {
+      final (dir, cloud) = await boundDevice();
+      final w = await start(dir, cloud);
+      final before = await data(w.storage);
+      final bobBefore = bobCloud(cloud);
+      final commits = cloud.commitCount;
+
+      await w.account.signOut();
+      w.auth.next = bob;
+      await w.account.signIn();
+      await _idle(w);
+
+      expect(w.account.phase, AccountPhase.signedOut);
+      expect(w.account.message, contains('다른 Google 계정의 백업에 연결되어 있어요'));
+      expect(w.account.message, contains('이 기기의 클라우드 연결 해제'));
+      expect(await w.storage.readBoundAccountUid(), _uid);
+      expect(await data(w.storage), before);
+      expect(cloud.commitCount, commits);
+      expect(bobCloud(cloud), bobBefore);
+      // Signed out (bob was rejected): nothing to release from here.
+      expect(w.account.canReleaseCloudBinding, isFalse);
+      expect(await w.account.releaseCloudBinding(), isFalse);
+      expect(await w.storage.readBoundAccountUid(), _uid);
+    });
+
+    test(
+        'explicit release: local data kept, alice\'s cloud untouched, signed '
+        'out; bob can sign in but nothing uploads until he sets it up',
+        () async {
+      final (dir, cloud) = await boundDevice(extraSongs: 2);
+      final w = await start(dir, cloud);
+      expect(w.sync.phase, CloudSyncPhase.connected);
+      expect(w.account.canReleaseCloudBinding, isTrue);
+      final before = await data(w.storage);
+      final aliceBefore = aliceCloud(cloud);
+      final bobBefore = bobCloud(cloud);
+      final backupMeta = await w.meta(SyncMetaKeys.preCloudSyncBackupFile);
+      expect(backupMeta, isNotNull);
+      final commits = cloud.commitCount;
+
+      expect(await w.account.releaseCloudBinding(), isTrue);
+      await _idle(w);
+
+      // Local songs/folders/memberships/tombstones/sync ids: identical.
+      expect(await data(w.storage), before);
+      expect((await w.storage.songs.getAll()).length, 4);
+      expect((await w.storage.folders.getAll()).length, 2);
+      await expectAllDirty(w.storage); // a later first connection uploads all
+      for (final key in const [
+        'account_uid',
+        'account_email_hint',
+        'last_successful_sync_at_ms',
+        'initial_sync_state',
+        'pull_cursor_songs_ms',
+        'pull_cursor_folders_ms',
+        'pull_cursor_folder_songs_ms',
+      ]) {
+        expect(await w.meta(key), isNull, reason: key);
+      }
+      expect(await w.meta(SyncMetaKeys.preCloudSyncBackupFile), backupMeta);
+      // Cloud: nothing written, alice's backup exactly as it was, no
+      // deletion of anything, the Auth account not touched.
+      expect(cloud.commitCount, commits);
+      expect(aliceCloud(cloud), aliceBefore);
+      expect(bobCloud(cloud), bobBefore);
+      expect(w.eraser.uidsTouched, isEmpty);
+      expect(w.deletionAuth.deleteCalls, 0);
+      expect(w.deletionAuth.reauthCalls, 0);
+      // Signed out, with the explanation.
+      expect(w.account.phase, AccountPhase.signedOut);
+      expect(w.account.bindingReleasedNotice, isTrue);
+      expect(w.sync.suspended, isFalse);
+
+      // Bob signs in: allowed now, but unbound — no automatic upload, even
+      // after a local edit.
+      w.auth.next = bob;
+      await w.account.signIn();
+      expect(w.account.phase, AccountPhase.signedIn);
+      expect(w.account.linkStatus, AccountLinkStatus.unlinked);
+      expect(w.account.bindingReleasedNotice, isFalse);
+      expect(w.sync.phase, CloudSyncPhase.notConnected);
+      await w.ui.songs.create(song('해제 후 추가', number: '777'));
+      await _idle(w);
+      expect(cloud.commitCount, commits);
+      expect(bobCloud(cloud), bobBefore);
+      expect(await w.storage.readBoundAccountUid(), isNull);
+
+      // Only the user's own "클라우드 백업 설정" connects bob (B-3 flow:
+      // both sides have data → merge decision).
+      await w.sync.startSetup();
+      if (w.sync.phase == CloudSyncPhase.needsMergeDecision) {
+        await w.sync.confirmMerge();
+      }
+      expect(w.sync.phase, CloudSyncPhase.connected);
+      expect(await w.storage.readBoundAccountUid(), _bobUid);
+      expect(cloud.docCount(_bobUid, CloudCollections.songs), greaterThan(1));
+      expect(aliceCloud(cloud), aliceBefore); // alice still untouched
+    });
+
+    test('alice can reconnect later via the first connection', () async {
+      final (dir, cloud) = await boundDevice();
+      final w = await start(dir, cloud);
+      expect(await w.account.releaseCloudBinding(), isTrue);
+      w.auth.next = _alice;
+      await w.account.signIn();
+      expect(w.account.linkStatus, AccountLinkStatus.unlinked);
+      expect(w.sync.phase, CloudSyncPhase.notConnected);
+    });
+
+    test('waits for a running sync; no dirty clear after the release',
+        () async {
+      final (dir, cloud) = await boundDevice();
+      final w = await start(dir, cloud);
+      await w.ui.songs.create(song('진행 중', number: '555'));
+      final gate = Completer<void>();
+      cloud.fetchGate = gate;
+      final run = w.sync.syncNow();
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(w.sync.busy, isTrue);
+      final release = w.account.releaseCloudBinding();
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      // Still waiting for the run: binding unchanged so far.
+      expect(await w.storage.readBoundAccountUid(), _uid);
+      cloud.fetchGate = null;
+      gate.complete();
+      await run;
+      expect(await release, isTrue);
+      await _idle(w);
+      expect(await w.storage.readBoundAccountUid(), isNull);
+      await expectAllDirty(w.storage);
+    });
+
+    test('refused with a recorded account deletion (no change)', () async {
+      final (dir, cloud) = await boundDevice();
+      final s = await open(dir);
+      await (s.syncStore as SqliteLocalSyncStore)
+          .markAccountDeletionStarted(_uid);
+      await s.close();
+      opened.remove(s);
+      final w = await start(dir, cloud);
+      expect(w.account.canReleaseCloudBinding, isFalse);
+      expect(await w.account.releaseCloudBinding(), isFalse);
+      expect(await w.storage.readBoundAccountUid(), _uid);
+      expect(w.deletion.pending, isNotNull);
+      await expectLater(
+        w.store.releaseCloudBinding(expectedBoundUid: _uid),
+        throwsA(isA<StateError>()),
+      );
+      expect(await w.storage.readBoundAccountUid(), _uid);
+    });
+
+    test('refused for a stale binding of another uid (store check)',
+        () async {
+      final (dir, cloud) = await boundDevice();
+      final w = await start(dir, cloud);
+      await expectLater(
+        w.store.releaseCloudBinding(expectedBoundUid: 'uid-other'),
+        throwsA(isA<StateError>()),
+      );
+      expect(await w.storage.readBoundAccountUid(), _uid);
+    });
+
+    test('previousAccountSameEmail keeps its own release, not this one',
+        () async {
+      final (dir, cloud) = await boundDevice();
+      const reborn = AccountUser(uid: 'uid-alice-2', email: 'alice@example.com');
+      final w = await start(dir, cloud, user: reborn);
+      expect(w.account.linkStatus, AccountLinkStatus.previousAccountSameEmail);
+      expect(w.account.canReleaseCloudBinding, isFalse);
+      expect(await w.account.releaseCloudBinding(), isFalse);
+      expect(await w.storage.readBoundAccountUid(), _uid);
+    });
+
+    test('account deletion still works after a release + reconnect',
+        () async {
+      final (dir, cloud) = await boundDevice();
+      final w = await start(dir, cloud);
+      expect(await w.account.releaseCloudBinding(), isTrue);
+      w.auth.next = _alice;
+      await w.account.signIn();
+      await w.sync.startSetup();
+      if (w.sync.phase == CloudSyncPhase.needsMergeDecision) {
+        await w.sync.confirmMerge();
+      }
+      expect(w.sync.phase, CloudSyncPhase.connected);
+      await w.deletion.deleteAccount();
+      expect(w.deletion.status, AccountDeletionStatus.completed);
+      expect(w.aliceDocs(), 0);
+      expect(w.bobDocs(), 2);
+      expect((await w.storage.songs.getAll()).length, 2);
+    });
+  });
+
   // -------------------------------------------------------------------------
   // Sync result lifecycle: a failure belongs to its account/binding
   // -------------------------------------------------------------------------

@@ -138,6 +138,17 @@ class AccountSheet extends StatelessWidget {
         final deletion = account.deletion;
         return [
           ?notice,
+          if (account.bindingReleasedNotice)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(4, 0, 4, 12),
+              child: Text(
+                '이 기기의 클라우드 연결을 해제했어요. 이 기기의 노래와 폴더, 이전 '
+                '계정의 클라우드 백업은 그대로예요. 다른 Google 계정으로 로그인한 뒤 '
+                '"클라우드 백업 설정"을 누르면 그 계정에 백업돼요.',
+                key: Key('cloudBindingReleasedNotice'),
+                style: TextStyle(fontSize: 13, color: AppColors.textPrimary),
+              ),
+            ),
           if (deletion != null && deletion.completedThisLaunch)
             const Padding(
               padding: EdgeInsets.fromLTRB(4, 0, 4, 12),
@@ -232,6 +243,10 @@ class AccountSheet extends StatelessWidget {
               label: const Text('로그아웃'),
             ),
           ),
+          if (account.canReleaseCloudBinding || account.releasingBinding) ...[
+            const SizedBox(height: 4),
+            _ReleaseCloudBindingSection(account: account),
+          ],
           ..._privacyPolicy(),
           if (account.deletion case final deletion?
               when account.linkStatus !=
@@ -706,6 +721,7 @@ Future<bool?> confirmAccountDeletion(BuildContext context) {
     context: context,
     builder: (context) => AlertDialog(
       key: const Key('accountDeleteDialog'),
+      insetPadding: _confirmDialogInset,
       backgroundColor: AppColors.surfaceHigh,
       title: const Text('계정과 클라우드 백업을 삭제할까요?', style: AppTextStyles.sheetTitle),
       content: SingleChildScrollView(
@@ -758,19 +774,179 @@ Future<bool?> confirmAccountDeletion(BuildContext context) {
         ),
       ),
       actions: [
-        TextButton(
-          key: const Key('accountDeleteCancel'),
-          onPressed: () => Navigator.of(context).pop(false),
-          child: const Text('취소'),
-        ),
-        FilledButton(
-          key: const Key('accountDeleteConfirm'),
-          style: FilledButton.styleFrom(
+        _ConfirmActionsRow(
+          cancelKey: const Key('accountDeleteCancel'),
+          confirmKey: const Key('accountDeleteConfirm'),
+          confirmLabel: '계정 및 백업 삭제',
+          confirmStyle: FilledButton.styleFrom(
             backgroundColor: AppColors.danger,
             foregroundColor: Colors.white,
           ),
-          onPressed: () => Navigator.of(context).pop(true),
-          child: const Text('계정 및 백업 삭제'),
+        ),
+      ],
+    ),
+  );
+}
+
+/// "취소" + a confirm button for a confirmation dialog. "취소" keeps its
+/// natural width and the (longer) confirm label gets all the rest, so it
+/// stays on one line at its normal size on phone widths; it only scales
+/// down when it really can't fit (e.g. very large accessibility text).
+/// Use with [_confirmDialogInset].
+/// A little less side inset than the default 40, so the action row has
+/// room on small iPhones (still clearly a dialog, not full width).
+const _confirmDialogInset = EdgeInsets.symmetric(horizontal: 24, vertical: 24);
+
+class _ConfirmActionsRow extends StatelessWidget {
+  final Key cancelKey;
+  final Key confirmKey;
+  final String confirmLabel;
+  final ButtonStyle? confirmStyle;
+
+  const _ConfirmActionsRow({
+    required this.cancelKey,
+    required this.confirmKey,
+    required this.confirmLabel,
+    this.confirmStyle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final padding = FilledButton.styleFrom(
+      padding: const EdgeInsets.symmetric(vertical: 13, horizontal: 12),
+    );
+    return Row(
+      children: [
+        TextButton(
+          key: cancelKey,
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('취소', maxLines: 1),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: FilledButton(
+            key: confirmKey,
+            style: confirmStyle?.merge(padding) ?? padding,
+            onPressed: () => Navigator.of(context).pop(true),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(confirmLabel, maxLines: 1, softWrap: false),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// "이 기기의 클라우드 연결 해제": entry in the account sheet while signed
+/// in as the bound account. Clearly separate from "로그아웃" (session only)
+/// and "계정 및 클라우드 데이터 삭제" (permanent).
+class _ReleaseCloudBindingSection extends StatelessWidget {
+  final AccountController account;
+
+  const _ReleaseCloudBindingSection({required this.account});
+
+  @override
+  Widget build(BuildContext context) {
+    final busy = account.releasingBinding;
+    final cloudBusy = account.cloudSync?.busy ?? false;
+    return Column(
+      key: const Key('releaseCloudBindingSection'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TextButton.icon(
+          key: const Key('releaseCloudBindingButton'),
+          onPressed: busy || cloudBusy
+              ? null
+              : () async {
+                  final ok = await confirmReleaseCloudBinding(
+                    context,
+                    email: account.user?.email,
+                  );
+                  if (ok == true) await account.releaseCloudBinding();
+                },
+          icon: busy
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.link_off_rounded, size: 18),
+          label: Text(busy ? '연결 해제 중…' : '이 기기의 클라우드 연결 해제'),
+        ),
+        const _Note(
+          '다른 Google 계정을 쓰려면 연결을 해제하세요. 이 기기의 노래·폴더와 '
+          '현재 계정의 클라우드 백업은 그대로 남아요.',
+        ),
+      ],
+    );
+  }
+}
+
+/// "이 기기의 클라우드 연결을 해제할까요?" — true only for the confirm button.
+Future<bool?> confirmReleaseCloudBinding(
+  BuildContext context, {
+  String? email,
+}) {
+  final account = email == null || email.isEmpty ? '현재 계정' : email;
+  final points = [
+    '이 기기의 노래와 폴더는 그대로 유지돼요.',
+    '$account의 클라우드 백업은 삭제되지 않아요.',
+    'Google 계정은 삭제되지 않고, 이 기기에서 로그아웃만 돼요.',
+    '해제한 뒤 이 기기에서 바꾼 내용은 이 계정의 백업에 반영되지 않아요.',
+    '다른 계정으로 로그인한 뒤 "클라우드 백업 설정"을 직접 눌러야 그 계정에 '
+        '백업돼요. 자동으로 올라가지 않아요.',
+  ];
+  return showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      key: const Key('releaseCloudBindingDialog'),
+      insetPadding: _confirmDialogInset,
+      backgroundColor: AppColors.surfaceHigh,
+      title: const Text(
+        '이 기기의 클라우드 연결을 해제할까요?',
+        style: AppTextStyles.sheetTitle,
+      ),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (final p in points)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '•  ',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                    Expanded(
+                      child: Text(
+                        p,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          height: 1.45,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+      actions: const [
+        _ConfirmActionsRow(
+          cancelKey: Key('releaseCloudBindingCancel'),
+          confirmKey: Key('releaseCloudBindingConfirm'),
+          confirmLabel: '연결 해제',
         ),
       ],
     ),

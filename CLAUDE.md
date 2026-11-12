@@ -293,3 +293,18 @@ CREATE TABLE folder_songs (
   dirty, data and sync ids kept); then the user starts "클라우드 백업
   설정" themselves. Different or unknown email → blocked and signed out as
   before. Nothing is ever released automatically.
+
+### 11.2 Release this device's cloud binding (account switch)
+
+- Account sheet (signed in as the bound account only) → "이 기기의 클라우드
+  연결 해제" → confirmation dialog → `AccountController.releaseCloudBinding`.
+  Three distinct actions: 로그아웃 (session only), 연결 해제 (this device's
+  binding only), 계정 및 클라우드 데이터 삭제 (permanent).
+- Order: `CloudSyncController.suspendForBindingRelease` (waits for a running
+  run) → `SqliteLocalSyncStore.releaseCloudBinding` (one transaction; only
+  while still bound to the signed-in uid and no `account_deletion_*` marker;
+  same local reset as 11.1) → sign-out → sync resumed.
+- Never touches the cloud, the Firebase/Google account, songs/folders or
+  sync ids. A different account is still blocked while bound; after the
+  release it may sign in but nothing uploads until the user runs "클라우드
+  백업 설정" (B-3 first connection) themselves.

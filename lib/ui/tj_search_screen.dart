@@ -221,6 +221,7 @@ class TjSearchScreenState extends State<TjSearchScreen> {
 
     return ListView.builder(
       key: const Key('tjSearchResultsList'),
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       padding: const EdgeInsets.only(bottom: 16),
       itemCount: _results.length,
       itemBuilder: (context, index) {

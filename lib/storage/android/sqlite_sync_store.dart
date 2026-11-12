@@ -355,6 +355,30 @@ class SqliteLocalSyncStore implements LocalSyncStore, AccountDeletionStore {
     });
   }
 
+  /// "이 기기의 클라우드 연결 해제": explicit, user-approved release of
+  /// this device's binding to the CURRENT (signed-in) cloud account, e.g. to
+  /// use another Google account. Local only, ONE transaction, the same
+  /// reset as [releasePreviousBinding]: only while still bound to
+  /// [expectedBoundUid] and while no account deletion is recorded (that
+  /// flow must finish or be cancelled on its own). Nothing in the cloud is
+  /// read, written or deleted; songs/folders/ids are kept.
+  Future<void> releaseCloudBinding({required String expectedBoundUid}) async {
+    await _db.transaction((txn) async {
+      final bound = await readSyncMeta(txn, SyncMetaKeys.accountUid);
+      if (bound == null || bound.isEmpty || bound != expectedBoundUid) {
+        throw StateError('binding changed');
+      }
+      final deletion = await readSyncMeta(
+        txn,
+        SyncMetaKeys.accountDeletionState,
+      );
+      if (deletion != null && deletion.isNotEmpty) {
+        throw StateError('account deletion in progress');
+      }
+      await _resetCloudBindingIn(txn);
+    });
+  }
+
   /// Removes the binding/sync bookkeeping and the deletion marker and marks
   /// every row "needs upload" (for whatever account comes next). Only the
   /// flag changes: data, sync ids and timestamps stay as they are. Backup

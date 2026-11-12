@@ -112,12 +112,26 @@ class _AnimatedSongListState extends State<AnimatedSongList> {
     if (_displayed.isEmpty) {
       return widget.empty;
     }
-    return AnimatedList(
-      key: _listKey,
-      padding: widget.padding,
-      initialItemCount: _displayed.length,
-      itemBuilder: (context, index, animation) =>
-          _wrap(_buildEntry(context, _displayed[index]), animation),
+    // Dragging the list closes the search keyboard, like
+    // ScrollViewKeyboardDismissBehavior.onDrag (AnimatedList has no such
+    // parameter); same check as ScrollView's own implementation.
+    return NotificationListener<ScrollUpdateNotification>(
+      onNotification: (notification) {
+        final scope = FocusScope.of(context);
+        if (notification.dragDetails != null &&
+            !scope.hasPrimaryFocus &&
+            scope.hasFocus) {
+          FocusManager.instance.primaryFocus?.unfocus();
+        }
+        return false;
+      },
+      child: AnimatedList(
+        key: _listKey,
+        padding: widget.padding,
+        initialItemCount: _displayed.length,
+        itemBuilder: (context, index, animation) =>
+            _wrap(_buildEntry(context, _displayed[index]), animation),
+      ),
     );
   }
 }

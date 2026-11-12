@@ -74,6 +74,16 @@ abstract class PreviousBindingRelease {
   Future<void> releasePreviousBinding({required String expectedBoundUid});
 }
 
+/// Optional: "이 기기의 클라우드 연결 해제" — releases this device's binding
+/// to the account that is signed in now, only after the user explicitly
+/// agreed. Local only: never deletes songs/folders or cloud data, never
+/// uploads or merges.
+abstract class CloudBindingRelease {
+  /// Throws if the device is no longer bound to [expectedBoundUid] or an
+  /// account deletion is recorded.
+  Future<void> releaseCloudBinding({required String expectedBoundUid});
+}
+
 /// How a signed-in account relates to this device's local database.
 enum AccountLinkStatus {
   /// The local database is not bound to any account yet.

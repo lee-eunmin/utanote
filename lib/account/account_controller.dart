@@ -103,6 +103,7 @@ class AccountController extends ChangeNotifier {
     if (_phase != AccountPhase.signedOut) return;
     final gen = ++_generation;
     _message = null;
+    _bindingReleased = false;
     _set(AccountPhase.signingIn);
     try {
       final user = await _gateway.signInWithGoogle();
@@ -200,7 +201,8 @@ class AccountController extends ChangeNotifier {
       _user = null;
       _linkStatus = null;
       _message = '이 기기는 다른 Google 계정의 백업에 연결되어 있어요. '
-          '기존 계정으로 로그인해 주세요.';
+          '기존 계정으로 로그인해 주세요. 다른 계정을 쓰려면 기존 계정으로 '
+          '로그인한 뒤 "이 기기의 클라우드 연결 해제"를 먼저 해 주세요.';
       _set(AccountPhase.signedOut);
       try {
         await _gateway.signOut();
@@ -265,6 +267,81 @@ class AccountController extends ChangeNotifier {
     await deletion?.reloadPending();
     await refreshLink();
     return true;
+  }
+
+  bool _releasingBinding = false;
+  bool _bindingReleased = false;
+
+  /// "이 기기의 클라우드 연결 해제" is running.
+  bool get releasingBinding => _releasingBinding;
+
+  /// "이 기기의 클라우드 연결 해제" finished and nobody has signed in since
+  /// (the signed-out sheet explains what happened and what's next).
+  bool get bindingReleasedNotice =>
+      _bindingReleased && _phase != AccountPhase.signedIn;
+
+  /// Whether "이 기기의 클라우드 연결 해제" can be offered: signed in as
+  /// the account this device is bound to, with cloud sync wired up, the
+  /// release supported, and no account deletion recorded or running.
+  bool get canReleaseCloudBinding =>
+      _phase == AccountPhase.signedIn &&
+      _user != null &&
+      _linkStatus == AccountLinkStatus.sameAccount &&
+      _boundAccount is CloudBindingRelease &&
+      cloudSync != null &&
+      !(cloudSync?.suspended ?? false) &&
+      deletion?.pending == null &&
+      !(deletion?.busy ?? false);
+
+  /// "이 기기의 클라우드 연결 해제": only after the user confirmed, only
+  /// while signed in as the bound account. Local only: stops sync (waiting
+  /// for a running run), removes this device's binding/sync bookkeeping and
+  /// marks every row "needs upload" — songs, folders and sync ids stay, the
+  /// account's cloud backup and the Firebase/Google account are untouched,
+  /// nothing is uploaded or merged. Then signs out so another Google
+  /// account can be chosen; connecting any account later is the normal
+  /// first connection ("클라우드 백업 설정"), started by the user.
+  /// Returns false (binding unchanged, sync resumed) if it doesn't apply or
+  /// failed.
+  Future<bool> releaseCloudBinding() async {
+    final user = _user;
+    final release = _boundAccount;
+    final cloud = cloudSync;
+    if (_releasingBinding ||
+        !canReleaseCloudBinding ||
+        user == null ||
+        cloud == null ||
+        release is! CloudBindingRelease) {
+      return false;
+    }
+    _releasingBinding = true;
+    _message = null;
+    notifyListeners();
+    try {
+      await cloud.suspendForBindingRelease();
+      final bound = await readBoundAccountUid();
+      if (bound != user.uid || _user?.uid != user.uid) {
+        cloud.resumeAfterBindingRelease();
+        return false;
+      }
+      try {
+        await (release as CloudBindingRelease)
+            .releaseCloudBinding(expectedBoundUid: user.uid);
+      } catch (e) {
+        debugPrint('[account] releasing cloud binding failed: $e');
+        _message = '클라우드 연결을 해제하지 못했어요. 이 기기의 노래와 폴더는 그대로예요.';
+        cloud.resumeAfterBindingRelease();
+        return false;
+      }
+      cloud.onCurrentBindingReleased();
+      await signOut();
+      cloud.resumeAfterBindingRelease();
+      _bindingReleased = true;
+      return true;
+    } finally {
+      _releasingBinding = false;
+      notifyListeners();
+    }
   }
 
   void _set(AccountPhase phase) {

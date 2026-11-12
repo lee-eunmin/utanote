@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:utanote/account/account_controller.dart';
@@ -7,6 +8,9 @@ import 'package:utanote/account/auth_gateway.dart';
 import 'package:utanote/config/account_links.dart';
 import 'package:utanote/sync/account_data_deletion.dart';
 import 'package:utanote/sync/cloud_sync_backend.dart';
+import 'package:utanote/sync/cloud_sync_controller.dart';
+import 'package:utanote/sync/initial_sync_engine.dart';
+import 'package:utanote/sync/local_sync_store.dart';
 import 'package:utanote/ui/external_link.dart';
 import 'package:utanote/ui/widgets/account_button.dart';
 
@@ -402,6 +406,150 @@ void main() {
     expect(find.byKey(const Key('previousBindingSection')), findsNothing);
     expect(bound.releases, 0);
   });
+
+  // --- "이 기기의 클라우드 연결 해제" (current account) ---------------------
+
+  Future<(AccountController, _CurrentBinding)> boundSheet(
+    WidgetTester tester,
+  ) async {
+    final bound = _CurrentBinding(uid: _alice.uid);
+    final auth = FakeAuth(_alice);
+    final account = AccountController(gateway: auth, boundAccount: bound);
+    account.cloudSync = CloudSyncController(
+      engine: InitialSyncEngine(
+        store: _UnusedStore(),
+        backend: FakeCloudBackend(),
+      ),
+      account: account,
+    );
+    account.deletion = AccountDeletionController(
+      account: account,
+      auth: FakeDeletionAuth(_alice),
+      store: _MemStore(),
+      eraser: FakeCloudEraser(FakeCloudBackend()),
+    );
+    await account.start();
+    auth.users.add(_alice);
+    await tester.pumpAndSettle();
+    expect(account.linkStatus, AccountLinkStatus.sameAccount);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(child: AccountSheet(account: account)),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    return (account, bound);
+  }
+
+  testWidgets('bound account: sign-out, release and deletion are separate',
+      (tester) async {
+    final (account, bound) = await boundSheet(tester);
+    expect(find.byKey(const Key('signOutButton')), findsOneWidget);
+    expect(find.byKey(const Key('releaseCloudBindingButton')), findsOneWidget);
+    expect(find.text('이 기기의 클라우드 연결 해제'), findsOneWidget);
+    expect(find.byKey(const Key('accountDeleteButton')), findsOneWidget);
+
+    // 취소: nothing changes.
+    await tester.tap(find.byKey(const Key('releaseCloudBindingButton')));
+    await tester.pumpAndSettle();
+    expect(find.text('이 기기의 클라우드 연결을 해제할까요?'), findsOneWidget);
+    expect(find.textContaining('노래와 폴더는 그대로 유지돼요'), findsOneWidget);
+    expect(find.textContaining('alice@example.com의 클라우드 백업은 삭제되지 않아요'),
+        findsOneWidget);
+    expect(find.textContaining('자동으로 올라가지 않아요'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('releaseCloudBindingCancel')));
+    await tester.pumpAndSettle();
+    expect(bound.releases, 0);
+    expect(bound.uid, _alice.uid);
+    expect(account.phase, AccountPhase.signedIn);
+
+    // Confirm: released locally and signed out, with the explanation.
+    await tester.tap(find.byKey(const Key('releaseCloudBindingButton')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('releaseCloudBindingConfirm')));
+    await tester.pumpAndSettle();
+    expect(bound.releases, 1);
+    expect(bound.uid, isNull);
+    expect(account.phase, AccountPhase.signedOut);
+    expect(find.byKey(const Key('cloudBindingReleasedNotice')), findsOneWidget);
+    expect(find.byKey(const Key('releaseCloudBindingButton')), findsNothing);
+  });
+
+  testWidgets('unbound device: no release entry', (tester) async {
+    await setUpWorld(tester);
+    expect(find.byKey(const Key('releaseCloudBindingButton')), findsNothing);
+  });
+
+  for (final width in [320.0, 375.0, 390.0]) {
+    testWidgets('delete dialog buttons fit on one line at width $width',
+        (tester) async {
+      tester.view.physicalSize = Size(width * 3, 700 * 3);
+      tester.view.devicePixelRatio = 3;
+      addTearDown(tester.view.reset);
+      await setUpWorld(tester);
+      await tester.ensureVisible(find.byKey(const Key('accountDeleteButton')));
+      await tester.tap(find.byKey(const Key('accountDeleteButton')));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull); // no RenderFlex overflow
+
+      final confirm = find.byKey(const Key('accountDeleteConfirm'));
+      final cancel = find.byKey(const Key('accountDeleteCancel'));
+      expect(
+        tester.getSize(confirm).width,
+        greaterThan(tester.getSize(cancel).width),
+      );
+      // The label is laid out at full size, on one line, inside the button.
+      final label = find.descendant(
+        of: confirm,
+        matching: find.text('계정 및 백업 삭제'),
+      );
+      final labelBox = tester.getRect(label);
+      final buttonBox = tester.getRect(confirm);
+      expect(buttonBox.contains(labelBox.topLeft), isTrue);
+      expect(buttonBox.contains(labelBox.bottomRight), isTrue);
+      final fitted = tester.widget<FittedBox>(
+        find.descendant(of: confirm, matching: find.byType(FittedBox)),
+      );
+      expect(fitted.fit, BoxFit.scaleDown);
+      final rendered = tester.renderObject<RenderParagraph>(label);
+      expect(rendered.size.height, lessThan(rendered.text.style!.fontSize! * 2));
+      // Full size (not scaled down) on today's phone widths; on 320 the
+      // test font (every glyph 1em wide) is wider than real Korean text, so
+      // only the "fits inside" checks above apply there.
+      if (width >= 375) {
+        expect(labelBox.width, closeTo(rendered.size.width, 0.5));
+      }
+
+      await tester.tap(cancel);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('accountDeleteDialog')), findsNothing);
+    });
+  }
+}
+
+class _UnusedStore implements LocalSyncStore {
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('${invocation.memberName}');
+}
+
+class _CurrentBinding implements BoundAccountSource, CloudBindingRelease {
+  String? uid;
+  int releases = 0;
+
+  _CurrentBinding({this.uid});
+
+  @override
+  Future<String?> readBoundAccountUid() async => uid;
+
+  @override
+  Future<void> releaseCloudBinding({required String expectedBoundUid}) async {
+    if (uid != expectedBoundUid) throw StateError('binding changed');
+    releases++;
+    uid = null;
+  }
 }
 
 class _StaleBinding

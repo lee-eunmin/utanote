@@ -605,6 +605,20 @@ class CloudSyncController extends ChangeNotifier {
     notifyListeners();
   }
 
+  // --- "이 기기의 클라우드 연결 해제" (current account) ----------------------
+
+  /// Same stop as [suspendForAccountDeletion]: no new run starts and a run
+  /// in progress finishes first, so nothing touches the binding while it
+  /// is released.
+  Future<void> suspendForBindingRelease() => suspendForAccountDeletion();
+
+  /// Allows sync again after a binding release (or its failure).
+  void resumeAfterBindingRelease() => resumeAfterAccountDeletion();
+
+  /// The device's data no longer belongs to the account it was bound to:
+  /// forget that binding's sync state (as after an account deletion).
+  void onCurrentBindingReleased() => resetAfterAccountDeletion();
+
   /// "이 기기의 이전 클라우드 연결 해제" (Phase B-5.1) completed: the old
   /// binding's sync result and backoff are gone with it.
   void onBindingReleased() {

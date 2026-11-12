@@ -79,7 +79,8 @@ class _SqliteBoundAccount
     implements
         BoundAccountSource,
         BoundAccountEmailSource,
-        PreviousBindingRelease {
+        PreviousBindingRelease,
+        CloudBindingRelease {
   final SqliteLocalStorage _storage;
 
   _SqliteBoundAccount(this._storage);
@@ -96,6 +97,10 @@ class _SqliteBoundAccount
   @override
   Future<void> releasePreviousBinding({required String expectedBoundUid}) =>
       _sync.releasePreviousBinding(expectedBoundUid: expectedBoundUid);
+
+  @override
+  Future<void> releaseCloudBinding({required String expectedBoundUid}) =>
+      _sync.releaseCloudBinding(expectedBoundUid: expectedBoundUid);
 }
 
 /// Firebase Authentication with a Google credential from Google Sign-In
