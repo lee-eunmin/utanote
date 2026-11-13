@@ -202,7 +202,7 @@ class AccountController extends ChangeNotifier {
       _linkStatus = null;
       _message = '이 기기는 다른 Google 계정의 백업에 연결되어 있어요. '
           '기존 계정으로 로그인해 주세요. 다른 계정을 쓰려면 기존 계정으로 '
-          '로그인한 뒤 "이 기기의 클라우드 연결 해제"를 먼저 해 주세요.';
+          '로그인한 뒤 "클라우드 연결 해제"를 먼저 해 주세요.';
       _set(AccountPhase.signedOut);
       try {
         await _gateway.signOut();

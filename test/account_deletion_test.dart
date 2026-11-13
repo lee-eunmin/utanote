@@ -1225,7 +1225,7 @@ void main() {
 
       expect(w.account.phase, AccountPhase.signedOut);
       expect(w.account.message, contains('다른 Google 계정의 백업에 연결되어 있어요'));
-      expect(w.account.message, contains('이 기기의 클라우드 연결 해제'));
+      expect(w.account.message, contains('"클라우드 연결 해제"를 먼저 해 주세요'));
       expect(await w.storage.readBoundAccountUid(), _uid);
       expect(await data(w.storage), before);
       expect(cloud.commitCount, commits);

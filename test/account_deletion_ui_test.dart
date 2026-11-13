@@ -11,6 +11,8 @@ import 'package:utanote/sync/cloud_sync_backend.dart';
 import 'package:utanote/sync/cloud_sync_controller.dart';
 import 'package:utanote/sync/initial_sync_engine.dart';
 import 'package:utanote/sync/local_sync_store.dart';
+import 'package:utanote/sync/manual_sync.dart';
+import 'package:utanote/theme/app_theme.dart';
 import 'package:utanote/ui/external_link.dart';
 import 'package:utanote/ui/widgets/account_button.dart';
 
@@ -407,6 +409,202 @@ void main() {
     expect(bound.releases, 0);
   });
 
+  // --- Account sheet layout (the real bottom sheet, real app theme) -------
+
+  /// Opens the bound-account sheet the way the app does
+  /// ([showAccountSheet]) on a [width]x[height] screen with the given
+  /// safe-area insets and text scale. Connected with "지금 동기화", so the
+  /// sheet has every row a bound account shows.
+  Future<AccountController> openBoundAccountSheet(
+    WidgetTester tester, {
+    required double width,
+    required double height,
+    double top = 0,
+    double bottom = 0,
+    double textScale = 1,
+  }) async {
+    tester.view.physicalSize = Size(width, height);
+    tester.view.devicePixelRatio = 1;
+    tester.view.padding = FakeViewPadding(top: top, bottom: bottom);
+    addTearDown(tester.view.reset);
+
+    final auth = FakeAuth(_alice);
+    final account = AccountController(
+      gateway: auth,
+      boundAccount: _CurrentBinding(uid: _alice.uid),
+    );
+    account.cloudSync = CloudSyncController(
+      engine: InitialSyncEngine(
+        store: _UnusedStore(),
+        backend: FakeCloudBackend(),
+      ),
+      manual: ManualSyncEngine(
+        store: _UnusedStore(),
+        backend: FakeCloudBackend(),
+      ),
+      account: account,
+    );
+    account.deletion = AccountDeletionController(
+      account: account,
+      auth: FakeDeletionAuth(_alice),
+      store: _MemStore(),
+      eraser: FakeCloudEraser(FakeCloudBackend()),
+    );
+    await account.start();
+    auth.users.add(_alice);
+    await tester.pumpAndSettle();
+    expect(account.cloudSync!.phase, CloudSyncPhase.connected);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildAppTheme(),
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context).copyWith(
+            textScaler: TextScaler.linear(textScale),
+          ),
+          child: child!,
+        ),
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: Center(
+              child: TextButton(
+                key: const Key('openAccountSheet'),
+                onPressed: () => showAccountSheet(context, account),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.byKey(const Key('openAccountSheet')));
+    await tester.pumpAndSettle();
+    expect(find.byType(AccountSheet), findsOneWidget);
+    return account;
+  }
+
+  ScrollPosition sheetScroll(WidgetTester tester) => tester
+      .state<ScrollableState>(
+        find.descendant(
+          of: find.byType(AccountSheet),
+          matching: find.byType(Scrollable),
+        ),
+      )
+      .position;
+
+  // Common iPhone screens (logical points, safe-area insets).
+  const iPhones = <String, (double, double, double, double)>{
+    'iPhone SE (2nd/3rd) 375x667': (375, 667, 20, 0),
+    'iPhone 13 mini 375x812': (375, 812, 50, 34),
+    'iPhone 15 390x844': (390, 844, 47, 34),
+    'iPhone 15 Pro Max 430x932': (430, 932, 59, 34),
+  };
+
+  for (final MapEntry(key: name, value: (w, h, top, bottom))
+      in iPhones.entries) {
+    testWidgets('$name: whole sheet visible without scrolling', (tester) async {
+      await openBoundAccountSheet(
+        tester,
+        width: w,
+        height: h,
+        top: top,
+        bottom: bottom,
+      );
+      expect(tester.takeException(), isNull);
+      // Nothing to scroll: the sheet is as tall as its content.
+      expect(sheetScroll(tester).maxScrollExtent, 0);
+      // The red deletion entry is on screen, above the home indicator.
+      final delete = tester.getRect(
+        find.byKey(const Key('accountDeleteButton')),
+      );
+      expect(delete.top, greaterThanOrEqualTo(top));
+      expect(delete.bottom, lessThanOrEqualTo(h - bottom));
+      // The sheet stays below the status bar.
+      expect(
+        tester.getRect(find.byType(AccountSheet)).top,
+        greaterThanOrEqualTo(top),
+      );
+      // 로그아웃 and 클라우드 연결 해제 share one row, side by side.
+      final signOut = tester.getRect(find.byKey(const Key('signOutButton')));
+      final release = tester.getRect(
+        find.byKey(const Key('releaseCloudBindingButton')),
+      );
+      expect(signOut.center.dy, release.center.dy);
+      expect(signOut.right, lessThanOrEqualTo(release.left));
+      expect(find.text('클라우드 연결 해제'), findsOneWidget);
+      expect(find.text('로그아웃해도 이 기기의 노래와 폴더는 삭제되지 않습니다.'),
+          findsOneWidget);
+      expect(find.textContaining('다른 Google 계정을 쓰려면'), findsNothing);
+      expect(find.byKey(const Key('privacyPolicyLink')), findsOneWidget);
+    });
+  }
+
+  testWidgets('320pt wide screen: no overflow, labels kept on one line',
+      (tester) async {
+    await openBoundAccountSheet(tester, width: 320, height: 568, top: 20);
+    expect(tester.takeException(), isNull);
+    expect(find.text('로그아웃'), findsOneWidget);
+    expect(find.text('클라우드 연결 해제'), findsOneWidget);
+    expect(
+      tester.getRect(find.byKey(const Key('accountDeleteButton'))).bottom,
+      lessThanOrEqualTo(568),
+    );
+  });
+
+  for (final (w, h, scale) in [(390.0, 844.0, 1.3), (320.0, 568.0, 2.0)]) {
+    testWidgets('large text x$scale on ${w.toInt()}x${h.toInt()}: no overflow; '
+        'scrolls to the deletion entry', (tester) async {
+      await openBoundAccountSheet(
+        tester,
+        width: w,
+        height: h,
+        top: 20,
+        textScale: scale,
+      );
+      expect(tester.takeException(), isNull);
+      final signOut = tester.getRect(find.byKey(const Key('signOutButton')));
+      final release = tester.getRect(
+        find.byKey(const Key('releaseCloudBindingButton')),
+      );
+      expect(signOut.right, lessThanOrEqualTo(release.left));
+      expect(release.right, lessThanOrEqualTo(w));
+      await tester.ensureVisible(find.byKey(const Key('accountDeleteButton')));
+      await tester.pumpAndSettle();
+      expect(
+        tester.getRect(find.byKey(const Key('accountDeleteButton'))).bottom,
+        lessThanOrEqualTo(h),
+      );
+    });
+  }
+
+  testWidgets('row actions keep their behavior: 로그아웃, 연결 해제, 삭제',
+      (tester) async {
+    final account = await openBoundAccountSheet(
+      tester,
+      width: 375,
+      height: 667,
+      top: 20,
+    );
+    // 클라우드 연결 해제 → its confirmation dialog.
+    await tester.tap(find.byKey(const Key('releaseCloudBindingButton')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('releaseCloudBindingDialog')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('releaseCloudBindingCancel')));
+    await tester.pumpAndSettle();
+    expect(account.phase, AccountPhase.signedIn);
+    // 계정 및 클라우드 데이터 삭제 → its confirmation dialog.
+    await tester.tap(find.byKey(const Key('accountDeleteButton')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('accountDeleteDialog')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('accountDeleteCancel')));
+    await tester.pumpAndSettle();
+    expect(account.phase, AccountPhase.signedIn);
+    // 로그아웃 → signed out.
+    await tester.tap(find.byKey(const Key('signOutButton')));
+    await tester.pumpAndSettle();
+    expect(account.phase, AccountPhase.signedOut);
+  });
+
   // --- "이 기기의 클라우드 연결 해제" (current account) ---------------------
 
   Future<(AccountController, _CurrentBinding)> boundSheet(
@@ -448,7 +646,9 @@ void main() {
     final (account, bound) = await boundSheet(tester);
     expect(find.byKey(const Key('signOutButton')), findsOneWidget);
     expect(find.byKey(const Key('releaseCloudBindingButton')), findsOneWidget);
-    expect(find.text('이 기기의 클라우드 연결 해제'), findsOneWidget);
+    expect(find.text('클라우드 연결 해제'), findsOneWidget);
+    // The long explanation moved into the confirmation dialog.
+    expect(find.textContaining('다른 Google 계정을 쓰려면'), findsNothing);
     expect(find.byKey(const Key('accountDeleteButton')), findsOneWidget);
 
     // 취소: nothing changes.

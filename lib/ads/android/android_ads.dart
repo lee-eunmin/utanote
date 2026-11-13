@@ -21,6 +21,31 @@ final SongListNativeAdLayout _layout = SongListNativeAdLayout.forPlatform(
 /// Ads run on Android and iOS; desktop (and test hosts) get no ads.
 bool get _adsSupported => Platform.isAndroid || Platform.isIOS;
 
+/// Ad diagnostics, in every build mode (a handful of lines per launch), so
+/// a release/TestFlight build can be checked from the device log
+/// (Xcode/Console.app on iOS, `adb logcat` on Android): consent result, SDK
+/// initialization, each native ad request and its result with the AdMob
+/// error code/domain/message. Never logs anything about the user.
+void _adsLog(String message) => debugPrint('[ads] $message');
+
+/// AdMob test devices for this build, from
+/// `--dart-define=ADMOB_TEST_DEVICE_IDS=<id>[,<id>...]` (empty by default).
+///
+/// Listed devices get Google test ads (labelled "Test Ad", safe to tap)
+/// from the real production ad unit; every other device is unaffected. So
+/// an internal TestFlight build can be checked end to end without real
+/// impressions or clicks, and an id left in by mistake changes nothing for
+/// users. The id is the hash the Google Mobile Ads SDK prints to the device
+/// log on its first ad request ("To get test ads on this device, set: ...
+/// testDeviceIdentifiers = @[ @"<id>" ]").
+const _testDeviceIdsDefine = String.fromEnvironment('ADMOB_TEST_DEVICE_IDS');
+
+List<String> _testDeviceIds() => _testDeviceIdsDefine
+    .split(',')
+    .map((s) => s.trim())
+    .where((s) => s.isNotEmpty)
+    .toList();
+
 AdsConsentController? _consent;
 
 /// Starts the UMP consent flow (once per launch). The Mobile Ads SDK is only
@@ -28,10 +53,37 @@ AdsConsentController? _consent;
 /// awaited by `main()`, so app startup is never blocked by it.
 AdsConsentController? startAds() {
   if (!_adsSupported) return null;
-  return _consent ??= AdsConsentController(
+  final existing = _consent;
+  if (existing != null) return existing;
+  final consent = _consent = AdsConsentController(
     gateway: UmpConsentGateway(),
-    initializeSdk: () => MobileAds.instance.initialize(),
-  )..start();
+    initializeSdk: _initializeSdk,
+  );
+  unawaited(
+    consent.start().then((_) {
+      _adsLog(
+        'consent flow done: canRequestAds=${consent.canRequestAds}, '
+        'privacyOptionsRequired=${consent.privacyOptionsRequired}',
+      );
+    }),
+  );
+  return consent;
+}
+
+Future<void> _initializeSdk() async {
+  final testDevices = _testDeviceIds();
+  if (testDevices.isNotEmpty) {
+    await MobileAds.instance.updateRequestConfiguration(
+      RequestConfiguration(testDeviceIds: testDevices),
+    );
+    _adsLog('test device ids set (${testDevices.length})');
+  }
+  final status = await MobileAds.instance.initialize();
+  _adsLog(
+    'Mobile Ads initialized: ${status.adapterStatuses.entries.map(
+      (e) => '${e.key}=${e.value.state.name}',
+    ).join(', ')}',
+  );
 }
 
 ListAdSourceFactory? songListAdSourceFactory() {
@@ -90,20 +142,38 @@ class _NativeAdHolder extends ChangeNotifier {
   /// Requests the ad only once consent allows it (and the SDK is ready).
   Future<void> load(AdsConsentController consent) async {
     await consent.adsReady;
-    if (_disposed || !consent.canRequestAds) return;
+    if (_disposed) return;
+    if (!consent.canRequestAds) {
+      _adsLog('native ad not requested: consent no longer allows ads');
+      return;
+    }
+    _adsLog(
+      'requesting native ad: unit=$adUnitId, '
+      '${_layout.factoryId ?? 'small template'}',
+    );
     _ad = NativeAd(
       adUnitId: adUnitId,
       request: const AdRequest(),
       factoryId: _layout.factoryId,
       nativeTemplateStyle: _layout.usesTemplate ? _templateStyle() : null,
       listener: NativeAdListener(
-        onAdLoaded: (_) {
+        onAdLoaded: (ad) {
+          final info = (ad as NativeAd).responseInfo;
+          _adsLog(
+            'native ad loaded: responseId=${info?.responseId}, '
+            'adapter=${info?.mediationAdapterClassName}',
+          );
           if (_disposed) return;
           _loaded = true;
           notifyListeners();
         },
         // A failed slot simply stays zero-size; no retry this session.
-        onAdFailedToLoad: (ad, _) {
+        onAdFailedToLoad: (ad, error) {
+          _adsLog(
+            'native ad failed to load: code=${error.code}, '
+            'domain=${error.domain}, message=${error.message}, '
+            'responseId=${error.responseInfo?.responseId}',
+          );
           ad.dispose();
           _ad = null;
         },
@@ -116,7 +186,7 @@ class _NativeAdHolder extends ChangeNotifier {
     // no retry, no uncaught error.
     unawaited(
       ad.load().catchError((Object e) {
-        debugPrint('[ads] native ad request failed: $e');
+        _adsLog('native ad request failed: $e');
         if (identical(_ad, ad)) _ad = null;
         unawaited(ad.dispose());
       }),

@@ -57,6 +57,12 @@ class AccountButton extends StatelessWidget {
 Future<void> showAccountSheet(BuildContext context, AccountController account) {
   return showModalBottomSheet<void>(
     context: context,
+    // Sized to its content instead of the default 9/16-of-the-screen cap,
+    // so the whole sheet (down to "계정 및 클라우드 데이터 삭제") is visible
+    // without scrolling on a normal iPhone. Kept below the status bar;
+    // still scrolls when it really doesn't fit (large text, tiny screens).
+    isScrollControlled: true,
+    useSafeArea: true,
     backgroundColor: Colors.transparent,
     builder: (context) => AccountSheet(account: account),
   );
@@ -105,7 +111,7 @@ class AccountSheet extends StatelessWidget {
                   padding: EdgeInsets.symmetric(horizontal: 4),
                   child: Text('계정', style: AppTextStyles.sheetTitle),
                 ),
-                const SizedBox(height: 14),
+                const SizedBox(height: 10),
                 ..._body(),
               ],
             ),
@@ -215,38 +221,24 @@ class AccountSheet extends StatelessWidget {
               style: AppTextStyles.meta,
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           if (account.linkStatus ==
               AccountLinkStatus.previousAccountSameEmail) ...[
             ?notice,
             _PreviousBindingSection(account: account),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             const _Note('로그아웃해도 이 기기의 노래와 폴더는 삭제되지 않습니다.'),
           ] else if (account.cloudSync case final cloud?) ...[
             CloudBackupSection(cloud: cloud),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             const _Note('로그아웃해도 이 기기의 노래와 폴더는 삭제되지 않습니다.'),
           ] else
             const _Note(
               '클라우드 백업은 준비 중이에요. 로그아웃해도 이 기기의 노래와 폴더는 '
               '삭제되지 않습니다.',
             ),
-          const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            child: TextButton.icon(
-              key: const Key('signOutButton'),
-              onPressed: (account.deletion?.busy ?? false)
-                  ? null
-                  : account.signOut,
-              icon: const Icon(Icons.logout_rounded, size: 18),
-              label: const Text('로그아웃'),
-            ),
-          ),
-          if (account.canReleaseCloudBinding || account.releasingBinding) ...[
-            const SizedBox(height: 4),
-            _ReleaseCloudBindingSection(account: account),
-          ],
+          const SizedBox(height: 8),
+          _SessionActionsRow(account: account),
           ..._privacyPolicy(),
           if (account.deletion case final deletion?
               when account.linkStatus !=
@@ -839,47 +831,82 @@ class _ConfirmActionsRow extends StatelessWidget {
   }
 }
 
-/// "이 기기의 클라우드 연결 해제": entry in the account sheet while signed
-/// in as the bound account. Clearly separate from "로그아웃" (session only)
-/// and "계정 및 클라우드 데이터 삭제" (permanent).
-class _ReleaseCloudBindingSection extends StatelessWidget {
+/// "로그아웃" and, while signed in as the bound account, "클라우드 연결
+/// 해제" side by side in one row (only 로그아웃, full width, otherwise).
+/// Each label stays on one line and shrinks instead of overflowing on a
+/// narrow screen or with large text. The red "계정 및 클라우드 데이터 삭제"
+/// stays separate, below the divider.
+class _SessionActionsRow extends StatelessWidget {
   final AccountController account;
 
-  const _ReleaseCloudBindingSection({required this.account});
+  const _SessionActionsRow({required this.account});
+
+  @override
+  Widget build(BuildContext context) {
+    final signOut = TextButton.icon(
+      key: const Key('signOutButton'),
+      onPressed: (account.deletion?.busy ?? false) ? null : account.signOut,
+      icon: const Icon(Icons.logout_rounded, size: 18),
+      label: const _OneLineLabel('로그아웃'),
+    );
+    if (!(account.canReleaseCloudBinding || account.releasingBinding)) {
+      return SizedBox(width: double.infinity, child: signOut);
+    }
+    return Row(
+      children: [
+        Expanded(child: signOut),
+        const SizedBox(width: 8),
+        Expanded(child: _ReleaseCloudBindingButton(account: account)),
+      ],
+    );
+  }
+}
+
+/// One-line button label that scales down rather than wrap or overflow.
+class _OneLineLabel extends StatelessWidget {
+  final String text;
+
+  const _OneLineLabel(this.text);
+
+  @override
+  Widget build(BuildContext context) => FittedBox(
+    fit: BoxFit.scaleDown,
+    child: Text(text, maxLines: 1, softWrap: false),
+  );
+}
+
+/// "클라우드 연결 해제" (this device's binding only): entry in the account
+/// sheet while signed in as the bound account. Clearly separate from
+/// "로그아웃" (session only) and "계정 및 클라우드 데이터 삭제" (permanent);
+/// the confirmation dialog explains what it does.
+class _ReleaseCloudBindingButton extends StatelessWidget {
+  final AccountController account;
+
+  const _ReleaseCloudBindingButton({required this.account});
 
   @override
   Widget build(BuildContext context) {
     final busy = account.releasingBinding;
     final cloudBusy = account.cloudSync?.busy ?? false;
-    return Column(
-      key: const Key('releaseCloudBindingSection'),
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        TextButton.icon(
-          key: const Key('releaseCloudBindingButton'),
-          onPressed: busy || cloudBusy
-              ? null
-              : () async {
-                  final ok = await confirmReleaseCloudBinding(
-                    context,
-                    email: account.user?.email,
-                  );
-                  if (ok == true) await account.releaseCloudBinding();
-                },
-          icon: busy
-              ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.link_off_rounded, size: 18),
-          label: Text(busy ? '연결 해제 중…' : '이 기기의 클라우드 연결 해제'),
-        ),
-        const _Note(
-          '다른 Google 계정을 쓰려면 연결을 해제하세요. 이 기기의 노래·폴더와 '
-          '현재 계정의 클라우드 백업은 그대로 남아요.',
-        ),
-      ],
+    return TextButton.icon(
+      key: const Key('releaseCloudBindingButton'),
+      onPressed: busy || cloudBusy
+          ? null
+          : () async {
+              final ok = await confirmReleaseCloudBinding(
+                context,
+                email: account.user?.email,
+              );
+              if (ok == true) await account.releaseCloudBinding();
+            },
+      icon: busy
+          ? const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.link_off_rounded, size: 18),
+      label: _OneLineLabel(busy ? '연결 해제 중…' : '클라우드 연결 해제'),
     );
   }
 }

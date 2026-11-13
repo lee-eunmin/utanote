@@ -27,7 +27,7 @@ abstract class ConsentGateway {
 ///
 /// [start] runs once per app launch: refresh consent info → show the consent
 /// form if required → check `canRequestAds()`. Errors at any step are only
-/// logged (debug builds); `canRequestAds()` is checked regardless, since
+/// logged (device log); `canRequestAds()` is checked regardless, since
 /// consent from a previous session may still allow ads. The Mobile Ads SDK
 /// is initialized, and [adsReady] completes, at most once — the first time
 /// `canRequestAds()` is true — no matter how many paths (startup, privacy
@@ -43,8 +43,10 @@ class AdsConsentController extends ChangeNotifier {
     void Function(String message)? log,
   }) : _log = log ?? _debugLog;
 
+  /// Every build mode: a consent/SDK failure in a release build must be
+  /// visible in the device log. Only errors are logged here.
   static void _debugLog(String message) {
-    if (kDebugMode) debugPrint('[ads consent] $message');
+    debugPrint('[ads consent] $message');
   }
 
   final _adsReady = Completer<void>();
