@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UtaNote 우타노트</title>
+  <meta name="description" content="UtaNote(우타노트)는 노래방 애창곡을 정리하는 노래 수첩 앱입니다. TJ 반주곡 검색, 폴더, 연습 상태, Google 계정 클라우드 백업을 지원합니다.">
+  <link rel="icon" type="image/png" href="/icon.png">
+  <link rel="apple-touch-icon" href="/icon.png">
+  <style>
+    :root {
+      --bg: #080809;
+      --surface: #141417;
+      --surface-high: #1e1e22;
+      --hairline: #2a2a30;
+      --text: #f3f1ed;
+      --text-2: #9a99a1;
+      --accent: #cc9a4c;
+    }
+    * { box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo",
+        "Pretendard", "Noto Sans KR", "Malgun Gothic", sans-serif;
+      line-height: 1.6;
+      word-break: keep-all;
+    }
+    a { color: var(--accent); }
+    .wrap { max-width: 760px; margin: 0 auto; padding: 0 16px; }
+    header.hero { padding: 56px 0 40px; text-align: center; }
+    .hero img {
+      width: 96px; height: 96px; border-radius: 22px;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, .5);
+    }
+    .hero h1 { margin: 20px 0 6px; font-size: 32px; letter-spacing: -0.5px; }
+    .hero h1 small { display: block; font-size: 15px; color: var(--text-2); font-weight: 500; letter-spacing: 0; }
+    .hero p { margin: 12px auto 0; max-width: 520px; color: var(--text-2); font-size: 16px; }
+    .store {
+      display: inline-block; margin-top: 24px; padding: 11px 20px;
+      border-radius: 10px; background: var(--accent); color: #000;
+      font-weight: 700; text-decoration: none;
+    }
+    section { padding: 28px 0; border-top: 1px solid var(--hairline); }
+    h2 { margin: 0 0 16px; font-size: 20px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+    .card { background: var(--surface-high); border: 1px solid var(--hairline); border-radius: 12px; padding: 16px; }
+    .card h3 { margin: 0 0 6px; font-size: 16px; }
+    .card p { margin: 0; color: var(--text-2); font-size: 14px; }
+    .badge {
+      display: inline-block; padding: 0 5px; border: 1px solid var(--accent);
+      border-radius: 4px; color: var(--accent); font-size: 11px; font-weight: 800;
+      line-height: 1.5; vertical-align: 1px;
+    }
+    ul.links { list-style: none; margin: 0; padding: 0; }
+    ul.links li { padding: 10px 0; border-bottom: 1px solid var(--hairline); }
+    ul.links li:last-child { border-bottom: 0; }
+    ul.links span { display: block; color: var(--text-2); font-size: 13px; }
+    footer { padding: 28px 0 40px; color: var(--text-2); font-size: 13px; text-align: center; border-top: 1px solid var(--hairline); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="hero">
+      <img src="/icon.png" alt="UtaNote 앱 아이콘" width="96" height="96">
+      <h1>UtaNote<small>우타노트 · 노래방 노래 수첩</small></h1>
+      <p>부르고 싶은 노래, 연습 중인 노래, 애창곡을 한곳에 정리하세요. 노래방 번호와 키, 연습 상태까지 기억해 두는 나만의 노래 수첩입니다.</p>
+      <a class="store" href="https://play.google.com/store/apps/details?id=com.eungman.UTANOTE">Google Play에서 받기</a>
+    </header>
+
+    <section>
+      <h2>주요 기능</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>노래 수첩</h3>
+          <p>노래방 번호, 제목, 가수, 키, 난이도, 연습 상태를 저장하고 즐겨찾기로 애창곡을 모아 볼 수 있어요.</p>
+        </div>
+        <div class="card">
+          <h3>폴더 정리</h3>
+          <p>모임별, 장르별, 연습용 등 원하는 대로 폴더를 만들어 노래를 나눠 담을 수 있어요.</p>
+        </div>
+        <div class="card">
+          <h3>빠른 검색</h3>
+          <p>번호, 제목, 가수, 직접 넣은 검색어(별칭)로 저장한 노래를 바로 찾을 수 있어요.</p>
+        </div>
+        <div class="card">
+          <h3>클라우드 백업</h3>
+          <p>Google 계정으로 로그인하면 노래와 폴더를 클라우드에 백업하고 다른 기기와 동기화할 수 있어요.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>TJ 노래 검색</h2>
+      <div class="card">
+        <p>TJ미디어 공식 반주곡 검색 결과를 앱 안에서 바로 확인하고, 노래 번호와 제목, 가수를 그대로 수첩에 추가할 수 있어요. TJ에서 MR 버전으로 표시한 곡에는 <span class="badge">MR</span> 표시가 붙어 일반 버전과 구분됩니다.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>고객지원 및 정책</h2>
+      <ul class="links">
+        <li>
+          <a href="mailto:utanote.karaoke@gmail.com">utanote.karaoke@gmail.com</a>
+          <span>문의, 오류 제보, 기능 제안</span>
+        </li>
+        <li>
+          <a href="https://docs.google.com/document/d/e/2PACX-1vRNG4p1IuKYHKLgS7ahPAWu5_MH4vmY8JTvVZjpE8Yi-pFvP6donk4ll6QQRQ0ikq8w5Wgcy428km3F/pub">개인정보처리방침</a>
+          <span>UtaNote가 처리하는 정보와 보관 방식</span>
+        </li>
+        <li>
+          <a href="https://lee-eunmin.github.io/utanote-account-deletion/">계정 및 클라우드 데이터 삭제 요청</a>
+          <span>앱 없이도 계정과 클라우드 백업 삭제를 요청할 수 있어요</span>
+        </li>
+      </ul>
+    </section>
+
+    <footer>© UtaNote</footer>
+  </div>
+</body>
+</html>
