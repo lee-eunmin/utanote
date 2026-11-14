@@ -66,7 +66,17 @@ function normalizeHeading(text) {
 
 /// Parses only the rows that live under the TJ result section whose <h2>
 /// heading matches `category` (one of the TJ_SECTION_HEADING keys), into
-/// normalized {songNumber, title, artist} rows, deduplicated by songNumber.
+/// normalized {songNumber, title, artist, isMr} rows, deduplicated by
+/// songNumber.
+///
+/// `isMr` is true only when TJ itself marks the row as an MR version: an
+/// icon `<p class="ico mr">MR</p>` in the row's title cell (TJ's other
+/// icons there are `ico mv` and `ico exclusive`; rows without icons have
+/// `<p class="no-ico">` or none). Never guessed from the title or query.
+/// TJ gives the MR version its own song number (e.g. IU "좋은 날": 33393,
+/// MR 62239 — verified against the live site), so songNumber stays the
+/// dedup key: both versions are kept, while the same number coming back
+/// from both the title and the artist search is still merged.
 /// Rows under any other section — including 작사가/작곡가/메들리 — are
 /// never read, regardless of what else is present on the page.
 function parseSection(html, category) {
@@ -85,10 +95,11 @@ function parseSection(html, category) {
       const songNumber = row.find('.grid-item.pos-type .num2').first().text().trim();
       const title = row.find('.grid-item.title3 p span').first().text().trim();
       const artist = row.find('.grid-item.title4.singer span').first().text().trim();
+      const isMr = row.find('.grid-item.title3 p.ico.mr').length > 0;
 
       if (!songNumber || !title || seen.has(songNumber)) return;
       seen.add(songNumber);
-      results.push({ songNumber, title, artist: artist || '' });
+      results.push({ songNumber, title, artist: artist || '', isMr });
     });
   });
 

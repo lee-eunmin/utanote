@@ -40,6 +40,7 @@ test('parses rows from the 곡 제목 section into normalized results, de-duped 
     songNumber: '28834',
     title: "さよならエレジー(ドラマ'トドメの接吻' OST)",
     artist: '菅田将暉',
+    isMr: false,
   });
   assert.equal(second.songNumber, '99999');
   assert.equal(second.title, '인스트루멘탈 트랙');
@@ -48,7 +49,7 @@ test('parses rows from the 곡 제목 section into normalized results, de-duped 
 
   // Lyricist/composer text (작사가A/작곡가A) must never leak into the response.
   for (const result of results) {
-    assert.equal(Object.keys(result).sort().join(','), 'artist,songNumber,title');
+    assert.equal(Object.keys(result).sort().join(','), 'artist,isMr,songNumber,title');
   }
 });
 
@@ -58,7 +59,7 @@ test('parses rows from the 가수 section independently of the 곡 제목 sectio
 
   // sample-results.html's 가수 section repeats only song 28834.
   assert.deepEqual(results, [
-    { songNumber: '28834', title: "さよならエレジー(ドラマ'トドメの接吻' OST)", artist: '菅田将暉' },
+    { songNumber: '28834', title: "さよならエレジー(ドラマ'トドメの接吻' OST)", artist: '菅田将暉', isMr: false },
   ]);
 });
 
@@ -75,13 +76,13 @@ test('parseSection only collects rows from the matching section, never 작사가
   const html = loadFixture('all-sections-results.html');
 
   assert.deepEqual(parseSection(html, 'TITLE'), [
-    { songNumber: '10001', title: 'Title Section Song', artist: 'Title Section Artist' },
+    { songNumber: '10001', title: 'Title Section Song', artist: 'Title Section Artist', isMr: false },
   ]);
   assert.deepEqual(parseSection(html, 'ARTIST'), [
-    { songNumber: '10002', title: 'Artist Section Song', artist: 'Artist Section Artist' },
+    { songNumber: '10002', title: 'Artist Section Song', artist: 'Artist Section Artist', isMr: false },
   ]);
   assert.deepEqual(parseSection(html, 'SONG_NUMBER'), [
-    { songNumber: '10005', title: 'Song Number Section Song', artist: 'Song Number Section Artist' },
+    { songNumber: '10005', title: 'Song Number Section Song', artist: 'Song Number Section Artist', isMr: false },
   ]);
 
   // None of our three categories may ever surface the 작사가(10003)/
@@ -131,7 +132,7 @@ test('searchRelevant searches only by song number for all-digit queries', async 
 
   const results = await searchRelevant('44444');
 
-  assert.deepEqual(results, [{ songNumber: '44444', title: 'Numeric Match', artist: 'Some Artist' }]);
+  assert.deepEqual(results, [{ songNumber: '44444', title: 'Numeric Match', artist: 'Some Artist', isMr: false }]);
   assert.equal(fetchMock.mock.calls.length, 1);
   assert.equal(
     new URL(fetchMock.mock.calls[0].arguments[0]).searchParams.get('strType'),
@@ -259,6 +260,68 @@ test('searchRelevant excludes lyricist/composer-only matches by construction', a
   const results = await searchRelevant('anything');
 
   for (const result of results) {
-    assert.equal(Object.keys(result).sort().join(','), 'artist,songNumber,title');
+    assert.equal(Object.keys(result).sort().join(','), 'artist,isMr,songNumber,title');
   }
+});
+
+// --- MR versions (TJ's "ico mr" icon) ------------------------------------
+
+test('parseSection marks only rows with the TJ "ico mr" icon as isMr', () => {
+  const results = parseSection(loadFixture('mr-title-results.html'), 'TITLE');
+
+  assert.deepEqual(results, [
+    { songNumber: '33393', title: '좋은 날', artist: 'IU', isMr: false },
+    { songNumber: '62239', title: '좋은 날', artist: 'IU', isMr: true },
+    // Another TJ icon ("60이상 반주기 전용곡") is not MR.
+    { songNumber: '95571', title: '좋은날', artist: '김종서', isMr: false },
+  ]);
+});
+
+test('parseSection: an MV icon is not MR, and rows without icons are not MR', () => {
+  const results = parseSection(loadFixture('mr-artist-results.html'), 'ARTIST');
+  assert.deepEqual(
+    results.map((r) => [r.songNumber, r.isMr]),
+    [['48879', false], ['33393', false], ['62239', true]]
+  );
+  // Fixtures with the "no-ico" placeholder are never MR either.
+  for (const result of parseSection(loadFixture('sample-results.html'), 'TITLE')) {
+    assert.equal(result.isMr, false);
+  }
+});
+
+test('isMr is never guessed from the title or the query', () => {
+  // The first "좋은 날" title is the normal version (33393).
+  const html = loadFixture('mr-title-results.html').replace(
+    '<span>좋은 날</span>',
+    '<span>좋은 날 (MR)</span>'
+  );
+  const normal = parseSection(html, 'TITLE').find((r) => r.songNumber === '33393');
+  assert.equal(normal.title, '좋은 날 (MR)');
+  assert.equal(normal.isMr, false);
+});
+
+test('searchRelevant keeps both the MR and the normal version, and still merges a song found by title and artist search', async (t) => {
+  const fetchMock = stubFetchByStrType({
+    [TJ_STR_TYPE.TITLE]: loadFixture('mr-title-results.html'),
+    [TJ_STR_TYPE.ARTIST]: loadFixture('mr-artist-results.html'),
+  });
+  t.after(() => fetchMock.mock.restore());
+
+  const results = await searchRelevant('좋은날');
+
+  // 33393 and 62239 come back from both searches: one copy each, at the
+  // exact-title tier, in TJ's order; then 48879 (artist search only).
+  assert.deepEqual(
+    results.map((r) => [r.songNumber, r.isMr]),
+    [['33393', false], ['62239', true], ['95571', false], ['48879', false]]
+  );
+});
+
+test('rankBySource keeps isMr of the merged row', () => {
+  const ranked = rankBySource(
+    [{ songNumber: '62239', title: '좋은 날', artist: 'IU', isMr: true }],
+    [{ songNumber: '62239', title: '좋은 날', artist: 'IU', isMr: true }],
+    '좋은날'
+  );
+  assert.deepEqual(ranked, [{ songNumber: '62239', title: '좋은 날', artist: 'IU', isMr: true }]);
 });

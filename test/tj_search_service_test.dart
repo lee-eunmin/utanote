@@ -63,6 +63,35 @@ void main() {
     );
   });
 
+  test('isMr: true / false / missing (older proxy) / not a bool', () async {
+    final service = TjSearchService(
+      client: MockClient(
+        (request) async => http.Response(
+          jsonEncode({
+            'results': [
+              {'songNumber': '62239', 'title': '좋은 날', 'artist': 'IU', 'isMr': true},
+              {'songNumber': '33393', 'title': '좋은 날', 'artist': 'IU', 'isMr': false},
+              {'songNumber': '28834', 'title': 'さよならエレジー', 'artist': '菅田将暉'},
+              {'songNumber': '1', 'title': 'x', 'artist': 'y', 'isMr': 'true'},
+            ],
+          }),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        ),
+      ),
+    );
+    final results = await service.search('좋은날');
+    expect(
+      results.map((r) => (r.songNumber, r.title, r.artist, r.isMr)).toList(),
+      [
+        ('62239', '좋은 날', 'IU', true),
+        ('33393', '좋은 날', 'IU', false),
+        ('28834', 'さよならエレジー', '菅田将暉', false),
+        ('1', 'x', 'y', false),
+      ],
+    );
+  });
+
   test('an empty address is still reported, not requested', () async {
     final requested = <Uri>[];
     final service = TjSearchService(baseUrl: '', client: recording(requested));

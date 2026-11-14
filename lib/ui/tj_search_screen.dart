@@ -319,16 +319,27 @@ class _TjResultTile extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 3),
-                Text(
-                  result.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 16.5,
-                    fontWeight: FontWeight.w700,
-                    height: 1.2,
-                    color: AppColors.textPrimary,
-                  ),
+                Row(
+                  children: [
+                    // Gives way (ellipsis) before the badge does.
+                    Flexible(
+                      child: Text(
+                        result.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 16.5,
+                          fontWeight: FontWeight.w700,
+                          height: 1.2,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                    ),
+                    if (result.isMr) ...[
+                      const SizedBox(width: 6),
+                      _MrBadge(key: Key('tjMrBadge_${result.songNumber}')),
+                    ],
+                  ],
                 ),
                 if (result.artist.isNotEmpty) ...[
                   const SizedBox(height: 2),
@@ -385,6 +396,34 @@ class _TjResultTile extends StatelessWidget {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// "MR" next to a TJ result's title, for rows TJ itself marks as the MR
+/// version ([TjSearchResult.isMr]). Small gold outline, so it reads as a
+/// label rather than a button.
+class _MrBadge extends StatelessWidget {
+  const _MrBadge({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: AppColors.accent),
+      ),
+      child: const Text(
+        'MR',
+        style: TextStyle(
+          fontSize: 10.5,
+          fontWeight: FontWeight.w800,
+          height: 1.2,
+          letterSpacing: 0.4,
+          color: AppColors.accent,
+        ),
       ),
     );
   }

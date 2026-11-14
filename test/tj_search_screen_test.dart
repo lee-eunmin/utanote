@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:utanote/main.dart';
 import 'package:utanote/models/song.dart';
 import 'package:utanote/models/tj_search_result.dart';
 import 'package:utanote/services/tj_search_service.dart';
@@ -221,6 +222,153 @@ void main() {
       expect(find.byKey(const Key('tjAdd_28834')), findsNothing);
     },
   );
+
+  // --- MR badge -----------------------------------------------------------
+
+  const mrResults = [
+    TjSearchResult(songNumber: '33393', title: '좋은 날', artist: 'IU'),
+    TjSearchResult(
+      songNumber: '62239',
+      title: '좋은 날',
+      artist: 'IU',
+      isMr: true,
+    ),
+  ];
+
+  Future<void> searchFor(WidgetTester tester, String query) async {
+    await tester.enterText(find.byKey(const Key('tjSearchField')), query);
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('MR badge only on the MR version; both versions listed', (
+    tester,
+  ) async {
+    final service = _FakeTjSearchService((query) async => mrResults);
+    await tester.pumpWidget(
+      wrap(TjSearchScreen(storage: await newStorage(), service: service)),
+    );
+    await searchFor(tester, '좋은날');
+
+    expect(find.text('33393'), findsOneWidget);
+    expect(find.text('62239'), findsOneWidget);
+    expect(find.text('좋은 날'), findsNWidgets(2));
+    expect(find.byKey(const Key('tjMrBadge_62239')), findsOneWidget);
+    expect(find.byKey(const Key('tjMrBadge_33393')), findsNothing);
+    expect(find.text('MR'), findsOneWidget);
+    // The badge sits right after the title, on the title's line.
+    final title = tester.getRect(find.text('좋은 날').last);
+    final badge = tester.getRect(find.byKey(const Key('tjMrBadge_62239')));
+    expect(badge.left, greaterThanOrEqualTo(title.right));
+    expect(badge.center.dy, closeTo(title.center.dy, 2));
+    // Both keep their "+".
+    expect(find.byKey(const Key('tjAdd_33393')), findsOneWidget);
+    expect(find.byKey(const Key('tjAdd_62239')), findsOneWidget);
+  });
+
+  testWidgets('adding the MR version: same add flow, MR is not stored', (
+    tester,
+  ) async {
+    final storage = await newStorage();
+    final service = _FakeTjSearchService((query) async => mrResults);
+    await tester.pumpWidget(
+      wrap(TjSearchScreen(storage: storage, service: service)),
+    );
+    await searchFor(tester, '좋은날');
+
+    await tester.tap(find.byKey(const Key('tjAdd_62239')));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('songTitleField')))
+          .controller!
+          .text,
+      '좋은 날',
+    );
+    await tester.ensureVisible(find.byKey(const Key('saveSongButton')));
+    await tester.tap(find.byKey(const Key('saveSongButton')));
+    await tester.pumpAndSettle();
+
+    final saved = await storage.songs.getAll();
+    expect(saved.single.songNumber, '62239');
+    expect(saved.single.title, '좋은 날');
+    // Only the added one switches to "추가됨"; the badge stays.
+    expect(find.byKey(const Key('tjAdded_62239')), findsOneWidget);
+    expect(find.byKey(const Key('tjAdd_33393')), findsOneWidget);
+    expect(find.byKey(const Key('tjMrBadge_62239')), findsOneWidget);
+  });
+
+  testWidgets('the song list never shows an MR badge (TJ search only)', (
+    tester,
+  ) async {
+    final storage = await newStorage();
+    final now = DateTime.now();
+    // The MR version's number, added earlier from TJ search.
+    await storage.songs.create(
+      Song(
+        karaokeType: 'TJ',
+        songNumber: '62239',
+        title: '좋은 날',
+        artist: 'IU',
+        createdAt: now,
+        updatedAt: now,
+      ),
+    );
+    await tester.pumpWidget(UtaNoteApp(storage: storage));
+    await tester.pumpAndSettle();
+    expect(find.text('좋은 날'), findsOneWidget);
+    expect(find.text('MR'), findsNothing);
+    expect(
+      find.byWidgetPredicate(
+        (w) => w.key is ValueKey<String> &&
+            (w.key! as ValueKey<String>).value.startsWith('tjMrBadge_'),
+      ),
+      findsNothing,
+    );
+  });
+
+  for (final width in [320.0, 375.0, 390.0]) {
+    testWidgets('${width.toInt()}pt: long MR title + "추가됨" do not overflow',
+        (tester) async {
+      tester.view.physicalSize = Size(width, 700);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final storage = await newStorage();
+      final now = DateTime.now();
+      await storage.songs.create(
+        Song(
+          karaokeType: 'TJ',
+          songNumber: '62585',
+          title: '좋은 날(미스터션샤인OST)',
+          artist: '멜로망스',
+          createdAt: now,
+          updatedAt: now,
+        ),
+      );
+      final service = _FakeTjSearchService(
+        (query) async => const [
+          TjSearchResult(
+            songNumber: '62585',
+            title: '좋은 날(미스터션샤인OST) 아주 긴 제목이 들어가는 경우를 위한 테스트',
+            artist: '멜로망스 그리고 아주 긴 가수 이름이 이어지는 경우',
+            isMr: true,
+          ),
+        ],
+      );
+      await tester.pumpWidget(
+        wrap(TjSearchScreen(storage: storage, service: service)),
+      );
+      await searchFor(tester, '좋은날');
+
+      expect(tester.takeException(), isNull);
+      final badge = tester.getRect(find.byKey(const Key('tjMrBadge_62585')));
+      final added = tester.getRect(find.byKey(const Key('tjAdded_62585')));
+      // The title gives way; the badge stays whole, left of "추가됨".
+      expect(badge.width, greaterThan(16));
+      expect(badge.right, lessThanOrEqualTo(added.left));
+      expect(added.right, lessThanOrEqualTo(width));
+    });
+  }
 
   testWidgets('a TJ number that is already saved cannot be added twice', (
     tester,

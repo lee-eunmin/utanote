@@ -75,45 +75,52 @@ class AccountSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      top: false,
-      child: Container(
-        decoration: const BoxDecoration(
-          color: AppColors.surfaceHigh,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-        ),
-        padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
-        // Scrolls when the content is taller than the bottom sheet allows
-        // (small screens, long account states).
-        child: SingleChildScrollView(
-          child: ListenableBuilder(
-            listenable: Listenable.merge([
-              account,
-              ?account.cloudSync,
-              ?account.deletion,
-            ]),
-            builder: (context, _) => Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(
-                  child: Container(
-                    width: 36,
-                    height: 4,
-                    margin: const EdgeInsets.only(bottom: 16),
-                    decoration: BoxDecoration(
-                      color: AppColors.hairline,
-                      borderRadius: BorderRadius.circular(4),
+    // The sheet background sits outside SafeArea (same as the song edit
+    // sheet), so the bottom safe-area inset (iOS home indicator, Android
+    // gesture bar) is painted in the sheet color instead of leaving a dark
+    // strip; the content itself stays inside the safe area.
+    return DecoratedBox(
+      key: const Key('accountSheetBackground'),
+      decoration: const BoxDecoration(
+        color: AppColors.surfaceHigh,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+          // Scrolls when the content is taller than the bottom sheet allows
+          // (small screens, long account states).
+          child: SingleChildScrollView(
+            child: ListenableBuilder(
+              listenable: Listenable.merge([
+                account,
+                ?account.cloudSync,
+                ?account.deletion,
+              ]),
+              builder: (context, _) => Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 36,
+                      height: 4,
+                      margin: const EdgeInsets.only(bottom: 16),
+                      decoration: BoxDecoration(
+                        color: AppColors.hairline,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
                     ),
                   ),
-                ),
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 4),
-                  child: Text('계정', style: AppTextStyles.sheetTitle),
-                ),
-                const SizedBox(height: 10),
-                ..._body(),
-              ],
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 4),
+                    child: Text('계정', style: AppTextStyles.sheetTitle),
+                  ),
+                  const SizedBox(height: 10),
+                  ..._body(),
+                ],
+              ),
             ),
           ),
         ),

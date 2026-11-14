@@ -8,10 +8,16 @@ class TjSearchResult {
   final String title;
   final String artist;
 
+  /// TJ marks this row as the MR version (its own song number). Shown as a
+  /// badge in TJ search only; never stored with a local song. False when the
+  /// API response has no `isMr` (older proxy) or anything but `true`.
+  final bool isMr;
+
   const TjSearchResult({
     required this.songNumber,
     required this.title,
     required this.artist,
+    this.isMr = false,
   });
 
   factory TjSearchResult.fromJson(Map<String, dynamic> json) {
@@ -19,6 +25,7 @@ class TjSearchResult {
       songNumber: (json['songNumber'] as String?) ?? '',
       title: (json['title'] as String?) ?? '',
       artist: (json['artist'] as String?) ?? '',
+      isMr: json['isMr'] == true,
     );
   }
 }

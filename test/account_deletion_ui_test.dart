@@ -539,6 +539,40 @@ void main() {
     });
   }
 
+  testWidgets('sheet color fills the bottom safe area; content stays above it',
+      (tester) async {
+    const h = 844.0, bottomInset = 34.0;
+    await openBoundAccountSheet(
+      tester,
+      width: 390,
+      height: h,
+      top: 47,
+      bottom: bottomInset,
+    );
+    expect(tester.takeException(), isNull);
+    final background = find.byKey(const Key('accountSheetBackground'));
+    final box = tester.widget<DecoratedBox>(background).decoration
+        as BoxDecoration;
+    expect(box.color, AppColors.surfaceHigh);
+    expect(
+      box.borderRadius,
+      const BorderRadius.vertical(top: Radius.circular(18)),
+    );
+    // Painted down to the screen's bottom edge (through the home indicator
+    // area), not stopping at the safe area.
+    expect(tester.getRect(background).bottom, h);
+    expect(tester.getRect(background), tester.getRect(find.byType(AccountSheet)));
+    // The content is still kept out of the inset.
+    expect(
+      tester.getRect(find.byKey(const Key('accountDeleteButton'))).bottom,
+      lessThanOrEqualTo(h - bottomInset),
+    );
+    final safeArea = tester.getRect(
+      find.descendant(of: background, matching: find.byType(SafeArea)),
+    );
+    expect(safeArea.bottom, h);
+  });
+
   testWidgets('320pt wide screen: no overflow, labels kept on one line',
       (tester) async {
     await openBoundAccountSheet(tester, width: 320, height: 568, top: 20);
